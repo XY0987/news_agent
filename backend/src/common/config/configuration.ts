@@ -10,7 +10,7 @@ export default () => ({
     port: parseInt(process.env.DATABASE_PORT ?? '3306', 10),
     username: process.env.DATABASE_USER || 'root',
     password: process.env.DATABASE_PASSWORD || 'password',
-    name: process.env.DATABASE_NAME || 'newsagent',
+    name: process.env.DATABASE_NAME || 'news_agent',
   },
 
   redis: {

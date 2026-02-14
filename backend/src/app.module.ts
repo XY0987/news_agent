@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import configuration from './common/config/configuration';
 import { UserModule } from './modules/user/user.module';
 import { SourceModule } from './modules/source/source.module';
@@ -22,6 +23,22 @@ import { SchedulerModule } from './modules/scheduler/scheduler.module';
       isGlobal: true,
       load: [configuration],
       envFilePath: ['.env', '../.env'],
+    }),
+
+    // MySQL 数据库连接
+    TypeOrmModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        type: 'mysql',
+        host: config.get<string>('database.host'),
+        port: config.get<number>('database.port'),
+        username: config.get<string>('database.username'),
+        password: config.get<string>('database.password'),
+        database: config.get<string>('database.name'),
+        autoLoadEntities: true,
+        synchronize: process.env.NODE_ENV !== 'production',
+        logging: process.env.NODE_ENV !== 'production',
+      }),
     }),
 
     // 业务模块
