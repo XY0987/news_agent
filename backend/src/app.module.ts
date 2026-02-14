@@ -15,6 +15,7 @@ import { MemoryModule } from './modules/memory/memory.module';
 import { FeedbackModule } from './modules/feedback/feedback.module';
 import { DigestModule } from './modules/digest/digest.module';
 import { SchedulerModule } from './modules/scheduler/scheduler.module';
+import { RedisModule } from './common/redis/redis.module';
 
 @Module({
   imports: [
@@ -40,6 +41,9 @@ import { SchedulerModule } from './modules/scheduler/scheduler.module';
         logging: process.env.NODE_ENV !== 'production',
       }),
     }),
+
+    // Redis
+    RedisModule,
 
     // 业务模块
     UserModule,
