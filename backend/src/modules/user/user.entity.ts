@@ -1,25 +1,2 @@
-import {
-  Entity,
-  PrimaryGeneratedColumn,
-  Column,
-  CreateDateColumn,
-  UpdateDateColumn,
-} from 'typeorm';
-
-@Entity('users')
-export class User {
-  @PrimaryGeneratedColumn()
-  id: number;
-
-  @Column({ length: 100 })
-  name: string;
-
-  @Column({ length: 200, nullable: true })
-  email: string;
-
-  @CreateDateColumn()
-  createdAt: Date;
-
-  @UpdateDateColumn()
-  updatedAt: Date;
-}
+// 从 common/database/entities 重新导出，保持向后兼容
+export { UserEntity as User } from '../../common/database/entities/user.entity';

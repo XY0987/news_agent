@@ -1,19 +1,19 @@
 import { Injectable } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { ContentEntity } from '../../common/database/entities/content.entity';
 
-/**
- * 过滤服务 - 去重 + 基础过滤
- * 封装为 Agent Tool: filter_and_dedup
- *
- * 内置规则引擎：
- * - 去重（URL 唯一键 + 标题 simhash）
- * - 最小长度过滤
- * - 语言过滤
- * - 垃圾/广告内容检测
- * - 黑名单作者/关键词
- * - 发布时间窗口
- */
 @Injectable()
 export class FilterService {
-  // TODO: 实现 filterAndDedup()
-  // TODO: 实现各过滤规则（DuplicateFilter, MinLengthFilter, SpamDetector 等）
+  constructor(
+    @InjectRepository(ContentEntity)
+    private readonly contentRepo: Repository<ContentEntity>,
+  ) {}
+
+  // TODO: 实现过滤去重逻辑
+  // - URL/external_id 强去重
+  // - 标题 simhash 弱去重
+  // - 最小长度过滤
+  // - 黑名单关键词/作者过滤
+  // - 时间窗口过滤
 }
