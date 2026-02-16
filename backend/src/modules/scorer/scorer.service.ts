@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, MoreThanOrEqual } from 'typeorm';
 import { ContentScoreEntity } from '../../common/database/entities/content-score.entity';
 import { ContentEntity } from '../../common/database/entities/content.entity';
 import { UserEntity } from '../../common/database/entities/user.entity';
@@ -57,6 +57,9 @@ export class ScorerService {
     const contents = await this.contentRepo.findBy({ id: In(contentIds) });
     const weights = (user.preferences as any)?.scoreWeights || DEFAULT_WEIGHTS;
 
+    // 获取最近已推送的内容标题用于新颖性评分
+    const recentSentTitles = await this.getRecentSentTitles(userId, 7);
+
     const scores: ScoreResult[] = [];
 
     for (const content of contents) {
@@ -64,7 +67,7 @@ export class ScorerService {
         relevance: this.scoreRelevance(content, user),
         quality: this.scoreQuality(content),
         timeliness: this.scoreTimeliness(content),
-        novelty: this.scoreNovelty(content),
+        novelty: this.scoreNovelty(content, recentSentTitles),
         actionability: this.scoreActionability(content),
       };
 
@@ -75,14 +78,24 @@ export class ScorerService {
         breakdown.novelty * weights.novelty +
         breakdown.actionability * weights.actionability;
 
-      // 保存评分到数据库
-      const scoreEntity = this.scoreRepo.create({
+      // 检查是否已有评分，有则更新
+      let scoreEntity = await this.scoreRepo.findOneBy({
         contentId: content.id,
         userId,
-        finalScore: Math.round(finalScore * 100) / 100,
-        scoreBreakdown: breakdown,
-        isSelected: false,
       });
+
+      if (scoreEntity) {
+        scoreEntity.finalScore = Math.round(finalScore * 100) / 100;
+        scoreEntity.scoreBreakdown = breakdown;
+      } else {
+        scoreEntity = this.scoreRepo.create({
+          contentId: content.id,
+          userId,
+          finalScore: Math.round(finalScore * 100) / 100,
+          scoreBreakdown: breakdown,
+          isSelected: false,
+        });
+      }
       await this.scoreRepo.save(scoreEntity);
 
       scores.push({
@@ -108,6 +121,31 @@ export class ScorerService {
         .map((s) => `${s.finalScore}`)
         .join(', ')}`,
     };
+  }
+
+  /**
+   * 获取最近已推送的内容标题
+   */
+  private async getRecentSentTitles(userId: string, days: number): Promise<string[]> {
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+
+    try {
+      const sentScores = await this.scoreRepo.find({
+        where: {
+          userId,
+          isSelected: true,
+          createdAt: MoreThanOrEqual(since),
+        },
+        relations: ['contentItem'],
+      });
+
+      return sentScores
+        .filter((s) => s.contentItem?.title)
+        .map((s) => s.contentItem.title);
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -142,8 +180,17 @@ export class ScorerService {
     }
 
     if (interests.length === 0) return 50; // 无画像时给中等分
+
+    // 标题匹配额外加分
+    let titleBonus = 0;
+    for (const interest of interests) {
+      if (title.includes(interest.toLowerCase())) {
+        titleBonus += 5;
+      }
+    }
+
     const matchRate = matchCount / interests.length;
-    return Math.min(100, Math.round(30 + matchRate * 70));
+    return Math.min(100, Math.round(30 + matchRate * 70 + titleBonus));
   }
 
   /**
@@ -197,12 +244,39 @@ export class ScorerService {
   }
 
   /**
-   * 新颖性评分 (0-100): 简单版 - 基于标题 hash 去重率
+   * 新颖性评分 (0-100): 基于与最近已推送内容的标题相似度
+   * 与已推送内容越不相似，分数越高
    */
-  private scoreNovelty(content: ContentEntity): number {
-    // MVP: 通过了去重过滤的内容默认给高分
-    // 后续可以实现与最近已推送内容的相似度比较
-    return 70;
+  private scoreNovelty(content: ContentEntity, recentSentTitles: string[]): number {
+    if (!content.title || recentSentTitles.length === 0) {
+      return 80; // 无历史数据时给较高分
+    }
+
+    const titleTokens = this.tokenize(content.title);
+    if (titleTokens.size === 0) return 80;
+
+    let maxSimilarity = 0;
+
+    for (const sentTitle of recentSentTitles) {
+      const sentTokens = this.tokenize(sentTitle);
+      if (sentTokens.size === 0) continue;
+
+      const intersection = new Set([...titleTokens].filter((t) => sentTokens.has(t)));
+      const union = new Set([...titleTokens, ...sentTokens]);
+      const similarity = intersection.size / union.size;
+
+      if (similarity > maxSimilarity) {
+        maxSimilarity = similarity;
+      }
+    }
+
+    // 相似度越高，新颖性越低
+    // similarity 0.0 → novelty 100
+    // similarity 0.3 → novelty 70
+    // similarity 0.5 → novelty 50
+    // similarity 0.7 → novelty 30
+    // similarity 1.0 → novelty 0
+    return Math.round(100 * (1 - maxSimilarity));
   }
 
   /**
@@ -236,5 +310,24 @@ export class ScorerService {
     if (text.includes('npm ') || text.includes('pip ') || text.includes('$ ')) score += 10;
 
     return Math.min(100, score);
+  }
+
+  /**
+   * 简单分词
+   */
+  private tokenize(text: string): Set<string> {
+    const tokens = new Set<string>();
+    const normalized = text.toLowerCase().trim();
+
+    for (const word of normalized.split(/\s+/)) {
+      if (word.length >= 2) tokens.add(word);
+    }
+
+    // 字符 bigram（对中文有效）
+    for (let i = 0; i < normalized.length - 1; i++) {
+      tokens.add(normalized.slice(i, i + 2));
+    }
+
+    return tokens;
   }
 }

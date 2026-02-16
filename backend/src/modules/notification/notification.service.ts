@@ -6,6 +6,7 @@ import { ContentScoreEntity } from '../../common/database/entities/content-score
 import { UserEntity } from '../../common/database/entities/user.entity';
 import { DigestEntity } from '../../common/database/entities/digest.entity';
 import { UserContentInteractionEntity } from '../../common/database/entities/user-content-interaction.entity';
+import { EmailChannel } from './channels/email.channel';
 
 @Injectable()
 export class NotificationService {
@@ -22,6 +23,7 @@ export class NotificationService {
     private readonly digestRepo: Repository<DigestEntity>,
     @InjectRepository(UserContentInteractionEntity)
     private readonly interactionRepo: Repository<UserContentInteractionEntity>,
+    private readonly emailChannel: EmailChannel,
   ) {}
 
   /**
@@ -31,7 +33,7 @@ export class NotificationService {
     userId: string;
     contentIds: string[];
     agentNote?: string;
-  }): Promise<{ success: boolean; message: string; digestId: string }> {
+  }): Promise<{ success: boolean; message: string; digestId: string; channels: Record<string, any> }> {
     const { userId, contentIds, agentNote } = params;
 
     const user = await this.userRepo.findOneBy({ id: userId });
@@ -58,13 +60,8 @@ export class NotificationService {
       await this.scoreRepo.save(score);
     }
 
-    // 渲染推送内容
-    const rendered = this.renderDigest(
-      contents,
-      scoreMap,
-      interactionMap,
-      agentNote,
-    );
+    // 渲染 Markdown 推送内容
+    const rendered = this.renderDigest(contents, scoreMap, interactionMap, agentNote);
 
     // 保存推送记录
     const digest = this.digestRepo.create({
@@ -72,24 +69,143 @@ export class NotificationService {
       type: 'daily',
       contentIds,
       renderedContent: rendered,
-      sentAt: new Date(),
     });
     const savedDigest = await this.digestRepo.save(digest);
 
-    // TODO: 实际发送邮件/Telegram（会话 4 实现）
+    // 通过各渠道发送
+    const channelResults: Record<string, any> = {};
+
+    // 邮件发送
+    const emailResult = await this.sendViaEmail(
+      user,
+      contents,
+      scoreMap,
+      interactionMap,
+      agentNote,
+    );
+    channelResults.email = emailResult;
+
+    // 更新推送时间
+    if (emailResult.success) {
+      savedDigest.sentAt = new Date();
+      await this.digestRepo.save(savedDigest);
+
+      // 更新交互记录的 notifiedAt
+      for (const contentId of contentIds) {
+        let interaction = interactionMap.get(contentId);
+        if (!interaction) {
+          interaction = this.interactionRepo.create({ userId, contentId });
+        }
+        interaction.notifiedAt = new Date();
+        await this.interactionRepo.save(interaction);
+      }
+    }
+
+    const allSuccess = Object.values(channelResults).some((r: any) => r.success);
+
     this.logger.log(
-      `每日精选已生成: userId=${userId}, 内容 ${contentIds.length} 篇, digestId=${savedDigest.id}`,
+      `每日精选推送: userId=${userId}, 内容 ${contentIds.length} 篇, digestId=${savedDigest.id}, 邮件=${emailResult.success ? '✓' : '✗'}`,
     );
 
     return {
-      success: true,
-      message: `每日精选推送成功，包含 ${contentIds.length} 篇内容`,
+      success: allSuccess,
+      message: allSuccess
+        ? `每日精选推送成功，包含 ${contentIds.length} 篇内容`
+        : `推送已保存但发送失败: ${emailResult.error || '未知错误'}`,
       digestId: savedDigest.id,
+      channels: channelResults,
     };
   }
 
   /**
-   * 渲染推送内容
+   * 通过邮件发送每日精选
+   */
+  private async sendViaEmail(
+    user: UserEntity,
+    contents: ContentEntity[],
+    scoreMap: Map<string, ContentScoreEntity>,
+    interactionMap: Map<string, UserContentInteractionEntity>,
+    agentNote?: string,
+  ): Promise<{ success: boolean; messageId?: string; error?: string }> {
+    const email = user.email || (user.notificationSettings as any)?.email;
+    if (!email) {
+      return { success: false, error: '用户未配置邮箱地址' };
+    }
+
+    if (!this.emailChannel.isAvailable()) {
+      return { success: false, error: 'SMTP 未配置，邮件通道不可用' };
+    }
+
+    const date = new Date().toLocaleDateString('zh-CN', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      weekday: 'long',
+    });
+
+    const items = contents.map((content, index) => {
+      const score = scoreMap.get(content.id);
+      const interaction = interactionMap.get(content.id);
+
+      return {
+        index: index + 1,
+        title: content.title || '无标题',
+        author: content.author || '未知来源',
+        url: content.url || '#',
+        finalScore: score?.finalScore || 0,
+        breakdown: (score?.scoreBreakdown || {}) as Record<string, number>,
+        summary: interaction?.summary || '',
+        actionSuggestions: ((interaction?.suggestions as any) || []) as {
+          type: string;
+          suggestion: string;
+        }[],
+      };
+    });
+
+    return this.emailChannel.sendDigestEmail(email, { date, agentNote, items });
+  }
+
+  /**
+   * 发送测试邮件
+   */
+  async sendTestEmail(email: string): Promise<{ success: boolean; error?: string }> {
+    if (!this.emailChannel.isAvailable()) {
+      return { success: false, error: 'SMTP 未配置' };
+    }
+
+    const result = await this.emailChannel.send({
+      to: email,
+      subject: '🔔 News Agent 测试邮件',
+      html: `
+        <div style="max-width:480px;margin:0 auto;padding:24px;font-family:sans-serif;">
+          <h2>✅ 邮件通道测试成功</h2>
+          <p>如果您收到此邮件，说明 News Agent 的邮件推送功能已正常配置。</p>
+          <p style="color:#6b7280;font-size:13px;">发送时间: ${new Date().toLocaleString('zh-CN')}</p>
+        </div>`,
+      text: 'News Agent 邮件通道测试成功',
+    });
+
+    return { success: result.success, error: result.error };
+  }
+
+  /**
+   * 检查通知渠道状态
+   */
+  async getChannelStatus(): Promise<Record<string, { available: boolean; configured: boolean }>> {
+    return {
+      email: {
+        available: this.emailChannel.isAvailable(),
+        configured: this.emailChannel.isAvailable(),
+      },
+      telegram: {
+        available: false,
+        configured: false,
+      },
+    };
+  }
+
+  /**
+   * 渲染推送内容（Markdown 格式，存入 DB）
    */
   private renderDigest(
     contents: ContentEntity[],
@@ -123,6 +239,16 @@ export class NotificationService {
 
       if (interaction && interaction.summary) {
         rendered += `\n${interaction.summary}\n`;
+      }
+
+      if (interaction?.suggestions) {
+        const suggestions = interaction.suggestions as any;
+        if (Array.isArray(suggestions) && suggestions.length > 0) {
+          rendered += `\n**💡 行动建议**:\n`;
+          for (const s of suggestions) {
+            rendered += `- ${s.suggestion}\n`;
+          }
+        }
       }
 
       if (content.url) {

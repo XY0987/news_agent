@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { NotificationController } from './notification.controller';
 import { NotificationService } from './notification.service';
+import { EmailChannel } from './channels/email.channel';
 import { ContentEntity } from '../../common/database/entities/content.entity';
 import { ContentScoreEntity } from '../../common/database/entities/content-score.entity';
 import { UserEntity } from '../../common/database/entities/user.entity';
@@ -19,7 +20,7 @@ import { UserContentInteractionEntity } from '../../common/database/entities/use
     ]),
   ],
   controllers: [NotificationController],
-  providers: [NotificationService],
-  exports: [NotificationService],
+  providers: [NotificationService, EmailChannel],
+  exports: [NotificationService, EmailChannel],
 })
 export class NotificationModule {}
