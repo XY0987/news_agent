@@ -1,15 +1,132 @@
-import { Controller } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Param,
+  Body,
+  Query,
+  HttpException,
+  HttpStatus,
+  Logger,
+} from '@nestjs/common';
 import { AgentService } from './agent.service';
+
+class RunAgentDto {
+  userId: string;
+}
 
 /**
  * Agent 交互接口
- * - POST /api/agent/chat       与 Agent 对话
- * - GET  /api/agent/suggestions 获取 Agent 建议
- * - POST /api/agent/feedback    提交对 Agent 建议的反馈
+ * - POST /api/agent/run          手动触发 Agent 执行（调试用）
+ * - GET  /api/agent/logs          查询 Agent 执行日志
+ * - GET  /api/agent/logs/:sessionId  查询单次执行的完整步骤
+ * - GET  /api/agent/sessions      查询最近的执行会话列表
  */
 @Controller('api/agent')
 export class AgentController {
+  private readonly logger = new Logger(AgentController.name);
+
   constructor(private readonly agentService: AgentService) {}
 
-  // TODO: 实现 Agent 对话、建议获取、反馈等接口
+  /**
+   * POST /api/agent/run
+   * 手动触发 Agent 执行每日推送任务
+   */
+  @Post('run')
+  async runAgent(@Body() body: RunAgentDto) {
+    if (!body.userId) {
+      throw new HttpException('userId is required', HttpStatus.BAD_REQUEST);
+    }
+
+    this.logger.log(`手动触发 Agent 执行: userId=${body.userId}`);
+
+    try {
+      const result = await this.agentService.runDailyDigest(body.userId);
+      return {
+        success: true,
+        data: result,
+      };
+    } catch (error) {
+      this.logger.error(`Agent 执行失败: ${(error as Error).message}`);
+      throw new HttpException(
+        {
+          success: false,
+          message: `Agent 执行失败: ${(error as Error).message}`,
+        },
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
+   * GET /api/agent/logs
+   * 查询 Agent 执行日志列表
+   */
+  @Get('logs')
+  async getLogs(
+    @Query('userId') userId: string,
+    @Query('limit') limit?: string,
+  ) {
+    if (!userId) {
+      throw new HttpException('userId is required', HttpStatus.BAD_REQUEST);
+    }
+
+    const logs = await this.agentService.getExecutionLogs(
+      userId,
+      limit ? parseInt(limit, 10) : 20,
+    );
+
+    return {
+      success: true,
+      data: logs,
+      total: logs.length,
+    };
+  }
+
+  /**
+   * GET /api/agent/logs/:sessionId
+   * 查询单次执行的完整步骤
+   */
+  @Get('logs/:sessionId')
+  async getSessionLogs(@Param('sessionId') sessionId: string) {
+    if (!sessionId) {
+      throw new HttpException(
+        'sessionId is required',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const logs = await this.agentService.getSessionLogs(sessionId);
+
+    return {
+      success: true,
+      data: logs,
+      total: logs.length,
+    };
+  }
+
+  /**
+   * GET /api/agent/sessions
+   * 查询最近的执行会话列表
+   */
+  @Get('sessions')
+  async getSessions(
+    @Query('userId') userId: string,
+    @Query('limit') limit?: string,
+  ) {
+    if (!userId) {
+      throw new HttpException('userId is required', HttpStatus.BAD_REQUEST);
+    }
+
+    const sessions = await this.agentService.getRecentSessions(
+      userId,
+      limit ? parseInt(limit, 10) : 10,
+    );
+
+    return {
+      success: true,
+      data: sessions,
+      total: sessions.length,
+    };
+  }
 }

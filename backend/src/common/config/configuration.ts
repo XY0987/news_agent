@@ -20,8 +20,9 @@ export default () => ({
   },
 
   llm: {
-    anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
-    openaiApiKey: process.env.OPENAI_API_KEY || '',
+    url: process.env.LLM_URL || 'https://api.openai.com/v1',
+    apiKey: process.env.LLM_API_KEY || '',
+    model: process.env.LLM_MODEL || 'gpt-4o',
   },
 
   collector: {
