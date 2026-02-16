@@ -569,6 +569,8 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
       actions: string[];
     }[]
   > {
+    if (!userId) return [];
+
     const logs = await this.agentLogRepo
       .createQueryBuilder('log')
       .select('log.session_id', 'sessionId')
@@ -577,7 +579,7 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
       .addSelect("GROUP_CONCAT(log.action ORDER BY log.created_at SEPARATOR ',')", 'actions')
       .where('log.user_id = :userId', { userId })
       .groupBy('log.session_id')
-      .orderBy('startTime', 'DESC')
+      .orderBy('MIN(log.created_at)', 'DESC')
       .limit(limit)
       .getRawMany();
 

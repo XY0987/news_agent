@@ -7,6 +7,7 @@ import {
   Logger,
   HttpException,
   HttpStatus,
+  BadRequestException,
 } from '@nestjs/common';
 import { CollectorService } from './collector.service.js';
 import { WechatTokenService } from './services/wechat-token.service.js';
@@ -44,6 +45,7 @@ export class CollectorController {
   @Post('system/sync')
   async sync(@Body() dto: SyncDto) {
     try {
+      if (!dto.userId) throw new BadRequestException('userId is required');
       this.logger.log(`手动触发采集: userId=${dto.userId}`);
 
       let results;

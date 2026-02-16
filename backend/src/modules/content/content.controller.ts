@@ -1,4 +1,12 @@
-import { Controller, Get, Post, Body, Param, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Param,
+  Query,
+  BadRequestException,
+} from '@nestjs/common';
 import { ContentService } from './content.service';
 import { FeedbackService } from '../feedback/feedback.service';
 import { ContentQueryDto, ContentFeedbackDto } from './dto/index';
@@ -24,6 +32,7 @@ export class ContentController {
 
   @Get('digest')
   async getTodayDigest(@Query('userId') userId: string) {
+    if (!userId) throw new BadRequestException('userId is required');
     const digest = await this.contentService.getTodayDigest(userId);
     return ApiResponse.ok(digest);
   }

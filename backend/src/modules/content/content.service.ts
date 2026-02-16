@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, MoreThanOrEqual } from 'typeorm';
 import { ContentEntity } from '../../common/database/entities/content.entity';
 import { ContentScoreEntity } from '../../common/database/entities/content-score.entity';
 import { UserContentInteractionEntity } from '../../common/database/entities/user-content-interaction.entity';
@@ -34,8 +34,9 @@ export class ContentService {
       qb.andWhere('c.title LIKE :search', { search: `%${query.search}%` });
     }
 
-    const sortBy = query.sortBy || 'created_at';
-    const sortOrder = query.sortOrder || 'DESC';
+    const ALLOWED_SORT_COLUMNS = ['created_at', 'collected_at', 'published_at', 'title'];
+    const sortBy = (query.sortBy && ALLOWED_SORT_COLUMNS.includes(query.sortBy)) ? query.sortBy : 'created_at';
+    const sortOrder = query.sortOrder === 'ASC' ? 'ASC' : 'DESC';
     qb.orderBy(`c.${sortBy}`, sortOrder);
 
     qb.skip(skip).take(pageSize);
@@ -77,15 +78,16 @@ export class ContentService {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const scores = await this.scoreRepo
-      .createQueryBuilder('cs')
-      .leftJoinAndSelect('cs.contentItem', 'c')
-      .where('cs.user_id = :userId', { userId })
-      .andWhere('cs.is_selected = :selected', { selected: true })
-      .andWhere('cs.created_at >= :today', { today })
-      .orderBy('cs.final_score', 'DESC')
-      .take(10)
-      .getMany();
+    const scores = await this.scoreRepo.find({
+      where: {
+        userId,
+        isSelected: true,
+        createdAt: MoreThanOrEqual(today),
+      },
+      relations: ['contentItem'],
+      order: { finalScore: 'DESC' },
+      take: 10,
+    });
 
     return scores.map((s) => ({
       content: s.contentItem,

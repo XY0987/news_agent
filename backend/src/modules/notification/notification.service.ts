@@ -39,6 +39,10 @@ export class NotificationService {
     const user = await this.userRepo.findOneBy({ id: userId });
     if (!user) throw new Error(`用户 ${userId} 不存在`);
 
+    if (!contentIds || contentIds.length === 0) {
+      throw new Error('contentIds 不能为空');
+    }
+
     const contents = await this.contentRepo.findBy({ id: In(contentIds) });
 
     // 获取评分信息

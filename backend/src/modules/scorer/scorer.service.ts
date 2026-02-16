@@ -49,6 +49,10 @@ export class ScorerService {
   }): Promise<{ scores: ScoreResult[]; summary: string }> {
     const { contentIds, userId } = params;
 
+    if (!contentIds || contentIds.length === 0) {
+      return { scores: [], summary: '没有内容需要评分' };
+    }
+
     const user = await this.userRepo.findOneBy({ id: userId });
     if (!user) {
       throw new Error(`用户 ${userId} 不存在`);

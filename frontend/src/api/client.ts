@@ -1,9 +1,27 @@
-/**
- * API 客户端配置
- * 后端 API 基础地址: http://localhost:8000/api
- */
+import axios from "axios";
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const apiClient = axios.create({
+  baseURL: "/api",
+  timeout: 30000,
+  headers: {
+    "Content-Type": "application/json",
+  },
+});
 
-// TODO: 封装统一的 API 请求方法（带错误处理、Token 注入等）
-export { API_BASE_URL };
+apiClient.interceptors.response.use(
+  (response) => {
+    const data = response.data;
+    if (data.code !== undefined && data.code !== 0) {
+      return Promise.reject(new Error(data.message || "请求失败"));
+    }
+    return response;
+  },
+  (error) => {
+    const message =
+      error.response?.data?.message || error.message || "网络异常";
+    console.error("API Error:", message);
+    return Promise.reject(new Error(message));
+  }
+);
+
+export default apiClient;

@@ -57,6 +57,17 @@ export class AgentToolRegistry {
     if (!entry) {
       throw new Error(`未知的 Tool: ${name}`);
     }
+
+    // 校验 required 参数，防止 undefined 值流入 TypeORM 查询
+    const params = entry.definition.function?.parameters;
+    if (params?.required) {
+      for (const req of params.required) {
+        if (args[req] === undefined || args[req] === null) {
+          throw new Error(`Tool ${name} 缺少必填参数: ${req}`);
+        }
+      }
+    }
+
     this.logger.log(
       `执行 Tool: ${name}, 参数: ${JSON.stringify(args).slice(0, 200)}`,
     );

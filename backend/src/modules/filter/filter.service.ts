@@ -47,7 +47,15 @@ export class FilterService {
     let contents: ContentEntity[];
 
     if (params.contentIds && params.contentIds.length > 0) {
-      contents = await this.contentRepo.findBy({ id: In(params.contentIds) });
+      contents = await this.contentRepo.findBy({
+        id: In(params.contentIds),
+      });
+    } else if (params.contentIds && params.contentIds.length === 0) {
+      return {
+        passedIds: [],
+        filteredOut: [],
+        stats: { total: 0, passed: 0, duplicateRemoved: 0, tooShort: 0, tooOld: 0, blacklisted: 0, similarToSent: 0 },
+      };
     } else {
       const since = new Date();
       since.setDate(since.getDate() - daysWindow);

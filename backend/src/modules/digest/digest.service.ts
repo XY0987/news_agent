@@ -42,15 +42,16 @@ export class DigestService {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const scores = await this.scoreRepo
-      .createQueryBuilder('cs')
-      .leftJoinAndSelect('cs.contentItem', 'c')
-      .where('cs.user_id = :userId', { userId })
-      .andWhere('cs.created_at >= :today', { today })
-      .andWhere('cs.final_score >= :minScore', { minScore })
-      .orderBy('cs.final_score', 'DESC')
-      .take(topK)
-      .getMany();
+    const scores = await this.scoreRepo.find({
+      where: {
+        userId,
+        createdAt: MoreThanOrEqual(today),
+        finalScore: MoreThanOrEqual(minScore),
+      },
+      relations: ['contentItem'],
+      order: { finalScore: 'DESC' },
+      take: topK,
+    });
 
     if (scores.length === 0) {
       return { items: [], summary: '今日暂无可推送的内容' };
@@ -59,9 +60,12 @@ export class DigestService {
     const contentIds = scores.map((s) => s.contentId);
 
     // 获取交互/摘要信息
-    const interactions = await this.interactionRepo.find({
-      where: { userId, contentId: In(contentIds) },
-    });
+    let interactions: any[] = [];
+    if (contentIds.length > 0) {
+      interactions = await this.interactionRepo.find({
+        where: { userId, contentId: In(contentIds) },
+      });
+    }
     const interactionMap = new Map(interactions.map((i) => [i.contentId, i]));
 
     const items: DigestItem[] = scores.map((score) => ({
@@ -144,7 +148,10 @@ export class DigestService {
   /**
    * 获取推送统计
    */
-  async getStats(userId: string, days = 30): Promise<{
+  async getStats(
+    userId: string,
+    days = 30,
+  ): Promise<{
     totalDigests: number;
     dailyCount: number;
     weeklyCount: number;

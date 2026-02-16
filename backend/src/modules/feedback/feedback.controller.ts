@@ -1,4 +1,4 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, Query, BadRequestException } from '@nestjs/common';
 import { FeedbackService } from './feedback.service';
 import { ApiResponse } from '../../common/dto/api-response.dto';
 
@@ -14,6 +14,7 @@ export class FeedbackController {
     @Query('userId') userId: string,
     @Query('days') days?: string,
   ) {
+    if (!userId) throw new BadRequestException('userId is required');
     const feedbacks = await this.feedbackService.findByUser(
       userId,
       days ? parseInt(days, 10) : 7,
@@ -29,6 +30,7 @@ export class FeedbackController {
     @Query('userId') userId: string,
     @Query('days') days?: string,
   ) {
+    if (!userId) throw new BadRequestException('userId is required');
     const stats = await this.feedbackService.getStats(
       userId,
       days ? parseInt(days, 10) : 30,

@@ -1,4 +1,10 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Param,
+  Query,
+  BadRequestException,
+} from '@nestjs/common';
 import { DigestService } from './digest.service';
 import { ApiResponse } from '../../common/dto/api-response.dto';
 
@@ -16,6 +22,7 @@ export class DigestController {
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
   ) {
+    if (!userId) throw new BadRequestException('userId is required');
     const { data, total } = await this.digestService.findByUser(userId, {
       type,
       page: page ? parseInt(page, 10) : 1,
@@ -34,6 +41,7 @@ export class DigestController {
    */
   @Get('today')
   async getTodayDigest(@Query('userId') userId: string) {
+    if (!userId) throw new BadRequestException('userId is required');
     const digest = await this.digestService.getTodayDigest(userId);
     return ApiResponse.ok(digest);
   }
@@ -46,6 +54,7 @@ export class DigestController {
     @Query('userId') userId: string,
     @Query('days') days?: string,
   ) {
+    if (!userId) throw new BadRequestException('userId is required');
     const stats = await this.digestService.getStats(
       userId,
       days ? parseInt(days, 10) : 30,

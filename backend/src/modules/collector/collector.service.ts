@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { ContentEntity } from '../../common/database/entities/content.entity.js';
 import { SourceEntity } from '../../common/database/entities/source.entity.js';
 import { WechatCollector } from './collectors/wechat.collector.js';
@@ -68,7 +68,8 @@ export class CollectorService {
    * 采集指定数据源
    */
   async collectBySources(sourceIds: string[]): Promise<CollectResult[]> {
-    const sources = await this.sourceRepo.findByIds(sourceIds);
+    if (!sourceIds || sourceIds.length === 0) return [];
+    const sources = await this.sourceRepo.findBy({ id: In(sourceIds) });
     const grouped = this.groupByType(sources);
     const results: CollectResult[] = [];
 
