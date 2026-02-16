@@ -14,6 +14,7 @@ import {
   UpdateUserDto,
   UpdateProfileDto,
   UpdatePreferencesDto,
+  UpdateNotificationSettingsDto,
 } from './dto/index';
 import { ApiResponse } from '../../common/dto/api-response.dto';
 
@@ -63,7 +64,7 @@ export class UserController {
   @Patch(':id/notification-settings')
   async updateNotificationSettings(
     @Param('id') id: string,
-    @Body() settings: Record<string, any>,
+    @Body() settings: UpdateNotificationSettingsDto,
   ) {
     const user = await this.userService.updateNotificationSettings(
       id,

@@ -21,7 +21,7 @@ export const notificationApi = {
 export const systemApi = {
   sync(userId: string, sourceIds?: string[]) {
     return apiClient
-      .post("/system/sync", { userId, sourceIds })
+      .post("/system/sync", { userId, sourceIds }, { timeout: 300000 })
       .then((r) => r.data);
   },
 };

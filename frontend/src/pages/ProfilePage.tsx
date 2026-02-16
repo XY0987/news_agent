@@ -1,7 +1,30 @@
-import { User } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useEffect } from "react";
+import { User, Loader2 } from "lucide-react";
+import { ProfileEditor } from "@/components/profile/ProfileEditor";
+import { InterestTags } from "@/components/profile/InterestTags";
+import { useUserStore } from "@/store";
+import { DEFAULT_USER_ID } from "@/utils";
+import type { UserProfile } from "@/types";
 
 export function ProfilePage() {
+  const { user, loading, fetchUser, updateProfile } = useUserStore();
+
+  useEffect(() => {
+    if (!user) fetchUser(DEFAULT_USER_ID);
+  }, [user, fetchUser]);
+
+  const handleSaveProfile = async (profile: Partial<UserProfile>) => {
+    if (user) await updateProfile(user.id, profile);
+  };
+
+  if (loading || !user) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <div>
@@ -13,16 +36,8 @@ export function ProfilePage() {
           完善你的画像以获得更精准的推荐
         </p>
       </div>
-      <Card>
-        <CardHeader>
-          <CardTitle>基本信息</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-muted-foreground">
-            画像编辑功能将在下一版本中实现
-          </p>
-        </CardContent>
-      </Card>
+      <ProfileEditor profile={user.profile} onSave={handleSaveProfile} />
+      <InterestTags profile={user.profile} onSave={handleSaveProfile} />
     </div>
   );
 }

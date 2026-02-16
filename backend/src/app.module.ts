@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ScheduleModule } from '@nestjs/schedule';
 import configuration from './common/config/configuration';
 import { UserModule } from './modules/user/user.module';
 import { SourceModule } from './modules/source/source.module';
@@ -25,6 +26,9 @@ import { RedisModule } from './common/redis/redis.module';
       load: [configuration],
       envFilePath: ['.env', '../.env'],
     }),
+
+    // 定时任务调度
+    ScheduleModule.forRoot(),
 
     // MySQL 数据库连接
     TypeOrmModule.forRootAsync({

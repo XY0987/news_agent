@@ -1,7 +1,29 @@
-import { SlidersHorizontal } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useEffect } from "react";
+import { SlidersHorizontal, Loader2 } from "lucide-react";
+import { PreferenceForm } from "@/components/profile/PreferenceForm";
+import { useUserStore } from "@/store";
+import { DEFAULT_USER_ID } from "@/utils";
+import type { UserPreferences } from "@/types";
 
 export function PreferencesPage() {
+  const { user, loading, fetchUser, updatePreferences } = useUserStore();
+
+  useEffect(() => {
+    if (!user) fetchUser(DEFAULT_USER_ID);
+  }, [user, fetchUser]);
+
+  const handleSave = async (prefs: Partial<UserPreferences>) => {
+    if (user) await updatePreferences(user.id, prefs);
+  };
+
+  if (loading || !user) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <div>
@@ -11,16 +33,7 @@ export function PreferencesPage() {
         </h1>
         <p className="text-muted-foreground mt-1">自定义推送和评分偏好</p>
       </div>
-      <Card>
-        <CardHeader>
-          <CardTitle>推送设置</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-muted-foreground">
-            偏好设置功能将在下一版本中实现
-          </p>
-        </CardContent>
-      </Card>
+      <PreferenceForm preferences={user.preferences} onSave={handleSave} />
     </div>
   );
 }

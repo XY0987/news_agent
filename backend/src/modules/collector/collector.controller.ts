@@ -9,23 +9,41 @@ import {
   HttpStatus,
   BadRequestException,
 } from '@nestjs/common';
+import { IsNotEmpty, IsOptional, IsString, IsArray } from 'class-validator';
 import { CollectorService } from './collector.service.js';
 import { WechatTokenService } from './services/wechat-token.service.js';
 import { WechatCollector } from './collectors/wechat.collector.js';
 import { ApiResponse } from '../../common/dto/api-response.dto.js';
 
 class SyncDto {
+  @IsString()
+  @IsNotEmpty()
   userId: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
   sourceIds?: string[];
 }
 
 class UpdateWechatCredentialsDto {
+  @IsString()
+  @IsNotEmpty()
   token: string;
+
+  @IsString()
+  @IsNotEmpty()
   cookie: string;
 }
 
-class SearchWechatAccountDto {
-  query: string;
+class ValidateWechatDto {
+  @IsString()
+  @IsNotEmpty()
+  identifier: string;
+
+  @IsOptional()
+  @IsString()
+  name?: string;
 }
 
 @Controller('api')
@@ -147,9 +165,7 @@ export class CollectorController {
    * POST /api/wechat/validate
    */
   @Post('wechat/validate')
-  async validateWechatSource(
-    @Body() body: { identifier: string; name?: string },
-  ) {
+  async validateWechatSource(@Body() body: ValidateWechatDto) {
     if (!body.identifier) {
       throw new HttpException(
         ApiResponse.fail('identifier 不能为空'),

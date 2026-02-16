@@ -9,9 +9,12 @@ import {
   HttpStatus,
   Logger,
 } from '@nestjs/common';
+import { IsNotEmpty, IsString } from 'class-validator';
 import { AgentService } from './agent.service';
 
 class RunAgentDto {
+  @IsString()
+  @IsNotEmpty()
   userId: string;
 }
 

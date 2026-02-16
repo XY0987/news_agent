@@ -1,4 +1,10 @@
-import { IsEnum, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import {
+  IsEnum,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  IsObject,
+} from 'class-validator';
 
 export class CreateSourceDto {
   @IsNotEmpty()
@@ -26,6 +32,7 @@ export class CreateSourceDto {
   name: string;
 
   @IsOptional()
+  @IsObject()
   config?: Record<string, any>;
 }
 
@@ -35,6 +42,7 @@ export class UpdateSourceDto {
   name?: string;
 
   @IsOptional()
+  @IsObject()
   config?: Record<string, any>;
 
   @IsOptional()
