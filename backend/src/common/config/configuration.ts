@@ -27,6 +27,23 @@ export default () => ({
   collector: {
     githubToken: process.env.GITHUB_TOKEN || '',
     werssApiKey: process.env.WERSS_API_KEY || '',
+    wechat: {
+      token: process.env.WECHAT_TOKEN || '',
+      cookie: process.env.WECHAT_COOKIE || '',
+      apiUrl: 'https://mp.weixin.qq.com/cgi-bin/appmsgpublish',
+      searchApiUrl: 'https://mp.weixin.qq.com/cgi-bin/searchbiz',
+      rateLimit: {
+        minDelay: 3000,
+        maxDelay: 5000,
+      },
+      articleFetchDelay: {
+        minDelay: 250,
+        maxDelay: 600,
+      },
+      maxRetry: 3,
+      timeout: 30000,
+      tokenTtlDays: 7,
+    },
   },
 
   notification: {
