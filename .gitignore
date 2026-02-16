@@ -30,3 +30,5 @@ coverage/
 # Docker volumes
 mysql_data/
 redis_data/
+
+ai_news_llm/
