@@ -46,7 +46,7 @@ function ScoreBadge({ score, size = "md" }: { score: number; size?: string }) {
         sizeClasses[size as keyof typeof sizeClasses] || sizeClasses.md
       )}
     >
-      {Math.round(score)}
+      {score != null ? Math.round(score) : '-'}
     </span>
   );
 }

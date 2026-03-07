@@ -88,6 +88,25 @@ import { FooService } from './foo.service.ts';
 
 注意：部分现有模块（如 `content.service.ts`）可能没有使用 `.js` 扩展名，这是因为 `nest build`（tsc）编译后可以正常解析。但新代码应统一加上 `.js` 以保持一致性。
 
+### 6. TypeORM createQueryBuilder 的 databaseName 报错
+
+**问题**：在 `content.service.ts` 的 `findAll` 中使用 `createQueryBuilder` + `leftJoinAndSelect('c.source', 's')` 以及子查询 `scoreRepo.createQueryBuilder('cs').where('cs.content_id IN ...')` 时，运行报错 `TypeError: Cannot read properties of undefined (reading 'databaseName')`。原因有两个：
+1. `createQueryBuilder` 的 `.where()` 中必须使用**实体属性名**（camelCase，如 `contentId`），而不是数据库列名（snake_case，如 `content_id`），否则 TypeORM 找不到列元数据导致 `undefined.databaseName`。
+2. `leftJoinAndSelect` 在某些 TypeORM 版本/配置下解析关联实体元数据时也可能触发同样的错误。
+
+**规则**：
+- 优先使用 `repo.find()` / `repo.findAndCount()` + `relations` 选项做关联查询，避免 `createQueryBuilder`
+- 如果必须用 `createQueryBuilder`，`.where()` 条件中**只能用实体属性名**（camelCase），不能用数据库列名（snake_case）：
+```typescript
+// ✅ 正确 - 使用实体属性名
+qb.where('cs.contentId IN (:...ids)', { ids })
+qb.andWhere('cs.userId = :uid', { uid })
+
+// ❌ 错误 - 使用数据库列名
+qb.where('cs.content_id IN (:...ids)', { ids })
+qb.andWhere('cs.user_id = :uid', { uid })
+```
+
 ---
 
 ## 关键架构约定
