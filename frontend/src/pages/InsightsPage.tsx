@@ -9,6 +9,9 @@ import {
   XCircle,
   Lightbulb,
   RefreshCw,
+  Code,
+  MessageSquare,
+  Wrench,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -166,54 +169,19 @@ export function InsightsPage() {
                         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                       </div>
                     ) : (
-                      <div className="space-y-3 border-t pt-3">
+                      <div className="space-y-0 border-t pt-3">
                         {(sessionLogs[session.sessionId] || []).map(
                           (log, idx) => (
-                            <div
+                            <StepDetail
                               key={log.id || idx}
-                              className="flex gap-3 text-sm"
-                            >
-                              <div className="flex flex-col items-center">
-                                {getActionIcon(log.action)}
-                                {idx <
-                                  (sessionLogs[session.sessionId]?.length ||
-                                    0) -
-                                    1 && (
-                                  <div className="w-px h-full bg-border mt-1" />
-                                )}
-                              </div>
-                              <div className="flex-1 min-w-0 pb-3">
-                                <div className="flex items-center gap-2">
-                                  <span className="font-medium text-xs">
-                                    {log.action}
-                                  </span>
-                                  <span className="text-xs text-muted-foreground">
-                                    {log.durationMs}ms
-                                  </span>
-                                </div>
-                                {log.reasoning && (
-                                  <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
-                                    {log.reasoning}
-                                  </p>
-                                )}
-                                {log.input &&
-                                  (log.input as any).toolCalls?.length > 0 && (
-                                    <div className="flex flex-wrap gap-1 mt-1">
-                                      {(
-                                        (log.input as any).toolCalls as any[]
-                                      ).map((tc: any, i: number) => (
-                                        <Badge
-                                          key={i}
-                                          variant="outline"
-                                          className="text-xs"
-                                        >
-                                          {tc.name}
-                                        </Badge>
-                                      ))}
-                                    </div>
-                                  )}
-                              </div>
-                            </div>
+                              log={log}
+                              isLast={
+                                idx ===
+                                (sessionLogs[session.sessionId]?.length || 0) -
+                                  1
+                              }
+                              getActionIcon={getActionIcon}
+                            />
                           )
                         )}
                       </div>
@@ -229,6 +197,162 @@ export function InsightsPage() {
           <SuggestionsList />
         </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+/** 单步详情组件：可展开查看完整调用链路和 AI 返回内容 */
+function StepDetail({
+  log,
+  isLast,
+  getActionIcon,
+}: {
+  log: AgentLog;
+  isLast: boolean;
+  getActionIcon: (action: string) => React.ReactNode;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const toolCalls = (log.input as any)?.toolCalls as any[] | undefined;
+  const toolResults = (log.output as any)?.toolResults as any[] | undefined;
+
+  return (
+    <div className="flex gap-3 text-sm">
+      <div className="flex flex-col items-center">
+        {getActionIcon(log.action)}
+        {!isLast && <div className="w-px flex-1 bg-border mt-1" />}
+      </div>
+      <div className="flex-1 min-w-0 pb-4">
+        {/* 标题行 */}
+        <div
+          className="flex items-center gap-2 cursor-pointer group"
+          onClick={() => setExpanded(!expanded)}
+        >
+          {expanded ? (
+            <ChevronDown className="h-3 w-3 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="h-3 w-3 text-muted-foreground" />
+          )}
+          <span className="font-medium text-xs">{log.action}</span>
+          <span className="text-xs text-muted-foreground">
+            {log.durationMs}ms
+          </span>
+          {toolCalls && toolCalls.length > 0 && (
+            <Badge variant="outline" className="text-xs">
+              <Wrench className="h-2.5 w-2.5 mr-1" />
+              {toolCalls.length} 工具调用
+            </Badge>
+          )}
+        </div>
+
+        {/* AI 推理/思考（始终显示摘要，展开显示全文） */}
+        {log.reasoning && (
+          <div className="mt-1.5 flex items-start gap-1.5">
+            <MessageSquare className="h-3 w-3 text-blue-500 mt-0.5 shrink-0" />
+            <p
+              className={`text-xs text-muted-foreground ${expanded ? "" : "line-clamp-2"}`}
+            >
+              {log.reasoning}
+            </p>
+          </div>
+        )}
+
+        {/* 展开后的详细内容 */}
+        {expanded && (
+          <div className="mt-2 space-y-2">
+            {/* 工具调用列表 */}
+            {toolCalls && toolCalls.length > 0 && (
+              <div className="rounded-md border bg-muted/30 p-2">
+                <p className="text-xs font-medium mb-1.5 flex items-center gap-1">
+                  <Wrench className="h-3 w-3" />
+                  工具调用
+                </p>
+                <div className="space-y-2">
+                  {toolCalls.map((tc: any, i: number) => (
+                    <div key={i} className="text-xs">
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <Badge variant="secondary" className="text-xs">
+                          {tc.name}
+                        </Badge>
+                      </div>
+                      {tc.arguments && (
+                        <pre className="bg-background rounded p-1.5 text-xs overflow-x-auto max-h-32 border">
+                          {typeof tc.arguments === "string"
+                            ? tc.arguments
+                            : JSON.stringify(tc.arguments, null, 2)}
+                        </pre>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 工具执行结果 */}
+            {toolResults && toolResults.length > 0 && (
+              <div className="rounded-md border bg-muted/30 p-2">
+                <p className="text-xs font-medium mb-1.5 flex items-center gap-1">
+                  <Code className="h-3 w-3" />
+                  执行结果
+                </p>
+                <div className="space-y-2">
+                  {toolResults.map((tr: any, i: number) => (
+                    <div key={i} className="text-xs">
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <Badge
+                          variant={
+                            tr.success === false ? "destructive" : "secondary"
+                          }
+                          className="text-xs"
+                        >
+                          {tr.name || `结果 ${i + 1}`}
+                        </Badge>
+                        {tr.success === false && (
+                          <span className="text-red-500 text-xs">失败</span>
+                        )}
+                      </div>
+                      <pre className="bg-background rounded p-1.5 text-xs overflow-x-auto max-h-40 border whitespace-pre-wrap break-all">
+                        {typeof tr.result === "string"
+                          ? tr.result.length > 2000
+                            ? tr.result.slice(0, 2000) + "\n... (已截断)"
+                            : tr.result
+                          : JSON.stringify(tr.result, null, 2)?.slice(0, 2000)}
+                      </pre>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 无工具调用时显示原始 input/output */}
+            {(!toolCalls || toolCalls.length === 0) &&
+              log.input &&
+              Object.keys(log.input).length > 0 && (
+                <div className="rounded-md border bg-muted/30 p-2">
+                  <p className="text-xs font-medium mb-1 flex items-center gap-1">
+                    <Code className="h-3 w-3" />
+                    输入
+                  </p>
+                  <pre className="bg-background rounded p-1.5 text-xs overflow-x-auto max-h-40 border whitespace-pre-wrap break-all">
+                    {JSON.stringify(log.input, null, 2)?.slice(0, 2000)}
+                  </pre>
+                </div>
+              )}
+            {(!toolResults || toolResults.length === 0) &&
+              log.output &&
+              Object.keys(log.output).length > 0 && (
+                <div className="rounded-md border bg-muted/30 p-2">
+                  <p className="text-xs font-medium mb-1 flex items-center gap-1">
+                    <Code className="h-3 w-3" />
+                    输出
+                  </p>
+                  <pre className="bg-background rounded p-1.5 text-xs overflow-x-auto max-h-40 border whitespace-pre-wrap break-all">
+                    {JSON.stringify(log.output, null, 2)?.slice(0, 2000)}
+                  </pre>
+                </div>
+              )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

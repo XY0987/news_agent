@@ -1,8 +1,25 @@
 /**
+ * 将日期字符串解析为 Date 对象
+ * 兼容处理无时区标记的时间字符串（当作本地时间）
+ */
+function parseDate(dateStr: string): Date {
+  if (!dateStr) return new Date();
+  // 已有时区信息（ISO 8601 带 Z 或 +/-），直接解析
+  if (/[Z+\-]\d{2}:?\d{2}$/.test(dateStr) || dateStr.endsWith('Z')) {
+    return new Date(dateStr);
+  }
+  // 无时区标记的字符串（如 "2026-03-07 10:00:00"），
+  // new Date() 对 "YYYY-MM-DD HH:mm:ss" 在不同浏览器行为不一致，
+  // 转成 "YYYY-MM-DDTHH:mm:ss" 格式后 Safari 等也能正确当本地时间解析
+  const normalized = dateStr.replace(' ', 'T');
+  return new Date(normalized);
+}
+
+/**
  * 日期格式化
  */
 export function formatDate(dateStr: string): string {
-  const date = new Date(dateStr);
+  const date = parseDate(dateStr);
   const now = new Date();
   const diff = now.getTime() - date.getTime();
   const minutes = Math.floor(diff / 60000);

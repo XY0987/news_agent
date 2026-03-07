@@ -21,6 +21,8 @@ interface WechatConfig {
   articleFetchDelay: { minDelay: number; maxDelay: number };
   maxRetry: number;
   timeout: number;
+  /** 默认文章最大保留天数，超过则过滤掉。source.config.maxAgeDays 可覆盖 */
+  maxAgeDays: number;
 }
 
 @Injectable()
@@ -52,6 +54,8 @@ export class WechatCollector extends BaseCollector {
         this.configService.get<number>('collector.wechat.maxRetry') ?? 3,
       timeout:
         this.configService.get<number>('collector.wechat.timeout') ?? 30000,
+      maxAgeDays:
+        this.configService.get<number>('collector.wechat.maxAgeDays') ?? 7,
     };
 
     this.httpClient = axios.create({
@@ -99,6 +103,7 @@ export class WechatCollector extends BaseCollector {
           source.id,
           creds.token,
           creds.cookie,
+          source.config,
         );
         allContents.push(...contents);
         this.logger.log(
@@ -242,6 +247,7 @@ export class WechatCollector extends BaseCollector {
     sourceId: string,
     token: string,
     cookie: string,
+    sourceConfig?: Record<string, any>,
   ): Promise<RawContent[]> {
     const maxRetry = 2;
 
@@ -283,7 +289,14 @@ export class WechatCollector extends BaseCollector {
           this.convertToRawContent(article, account, sourceId),
         );
 
-        // 补充正文
+        // 按发布时间过滤，source 级别的 maxAgeDays 优先，否则使用全局配置
+        contents = this.filterByAge(contents, account.nickname, sourceConfig);
+
+        if (contents.length === 0) {
+          return [];
+        }
+
+        // 补充正文（仅对时间过滤后的文章抓取正文，避免无效请求）
         contents = await this.enrichWithBodies(contents);
 
         return contents;
@@ -478,6 +491,47 @@ export class WechatCollector extends BaseCollector {
     } catch {
       return { text: '', snippet: '' };
     }
+  }
+
+  /**
+   * 按发布时间过滤文章
+   * source.config.maxAgeDays 优先于全局 wechatConfig.maxAgeDays
+   * 设为 0 或负数表示不过滤
+   */
+  private filterByAge(
+    contents: RawContent[],
+    nickname: string,
+    sourceConfig?: Record<string, any>,
+  ): RawContent[] {
+    const maxAgeDays: number =
+      (sourceConfig?.maxAgeDays as number) ?? this.wechatConfig.maxAgeDays;
+
+    // maxAgeDays <= 0 表示不限制
+    if (!maxAgeDays || maxAgeDays <= 0) {
+      return contents;
+    }
+
+    const cutoffMs = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
+    const recent: RawContent[] = [];
+    const outdated: RawContent[] = [];
+
+    for (const item of contents) {
+      const ts = item.publishedAt?.getTime();
+      // 缺少有效发布时间的文章视为最新，避免误删
+      if (!Number.isFinite(ts) || ts >= cutoffMs) {
+        recent.push(item);
+      } else {
+        outdated.push(item);
+      }
+    }
+
+    if (outdated.length > 0) {
+      this.logger.log(
+        `${nickname}: 过滤掉 ${outdated.length} 篇超过 ${maxAgeDays} 天的文章，保留 ${recent.length} 篇`,
+      );
+    }
+
+    return recent;
   }
 
   // ====== Helper Methods ======

@@ -44,6 +44,7 @@ export default () => ({
       maxRetry: 3,
       timeout: 30000,
       tokenTtlDays: 7,
+      maxAgeDays: parseInt(process.env.WECHAT_MAX_AGE_DAYS ?? '7', 10),
     },
   },
 

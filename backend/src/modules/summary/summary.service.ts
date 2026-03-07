@@ -122,7 +122,10 @@ export class SummaryService {
     const profile = user.profile || {};
     const textContent = (content.content || '').slice(0, 6000);
 
-    const prompt = `你是一个专业的技术内容分析助手。请根据用户画像分析以下内容：
+    const systemPrompt =
+      '你是一个专业的技术内容分析助手。你只能输出合法的 JSON 对象，不要输出任何其他内容，不要使用 markdown 代码块包裹。';
+
+    const userPrompt = `请根据用户画像分析以下内容：
 
 ## 用户画像
 ${JSON.stringify(profile, null, 2)}
@@ -141,35 +144,27 @@ ${textContent}
 5. 判断内容类型
 6. 提取标签
 
-## 输出格式（严格 JSON）
-{
-  "summary": "...",
-  "relevance_score": 80,
-  "key_points": ["...", "..."],
-  "action_suggestions": [
-    {"type": "learn", "suggestion": "..."},
-    {"type": "practice", "suggestion": "..."}
-  ],
-  "content_type": "new_technology",
-  "tags": ["AI", "LLM"]
-}`;
+直接输出以下格式的 JSON，不要有任何多余文字：
+{"summary":"...","relevance_score":80,"key_points":["...","..."],"action_suggestions":[{"type":"learn","suggestion":"..."},{"type":"practice","suggestion":"..."}],"content_type":"new_technology","tags":["AI","LLM"]}`;
 
     const response = await this.openai.chat.completions.create({
       model: this.model,
-      max_tokens: 1024,
-      messages: [{ role: 'user', content: prompt }],
-      response_format: { type: 'json_object' },
+      max_tokens: 8192,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
     });
 
-    const text = response.choices[0]?.message?.content || '';
+    const message = response.choices[0]?.message;
+    // 兼容推理模型（如 glm-5）：content 可能为 null，实际内容在 reasoning_content 中
+    const text =
+      message?.content?.trim() ||
+      (message as any)?.reasoning_content?.trim() ||
+      '';
 
-    // 提取 JSON
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new Error('LLM 响应中未找到 JSON');
-    }
-
-    const parsed = JSON.parse(jsonMatch[0]);
+    // 尝试多种方式提取 JSON
+    const parsed = this.extractJson(text);
 
     return {
       contentId: content.id,
@@ -180,6 +175,43 @@ ${textContent}
       contentType: parsed.content_type || 'unknown',
       tags: parsed.tags || [],
     };
+  }
+
+  /**
+   * 从 LLM 响应文本中提取 JSON 对象
+   * 兼容：纯 JSON、markdown 代码块包裹、前后有多余文字等情况
+   */
+  private extractJson(text: string): Record<string, any> {
+    // 1. 直接尝试解析（最理想情况）
+    try {
+      return JSON.parse(text);
+    } catch {
+      // 继续尝试其他方式
+    }
+
+    // 2. 尝试提取 markdown 代码块中的 JSON（```json ... ``` 或 ``` ... ```）
+    const codeBlockMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+    if (codeBlockMatch) {
+      try {
+        return JSON.parse(codeBlockMatch[1].trim());
+      } catch {
+        // 继续尝试
+      }
+    }
+
+    // 3. 贪婪匹配最外层 { ... }
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        return JSON.parse(jsonMatch[0]);
+      } catch {
+        // 继续尝试
+      }
+    }
+
+    // 4. 全部失败
+    this.logger.warn(`LLM 原始响应: ${text.slice(0, 500)}`);
+    throw new Error('LLM 响应中未找到有效 JSON');
   }
 
   /**

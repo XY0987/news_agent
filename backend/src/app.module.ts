@@ -41,8 +41,16 @@ import { RedisModule } from './common/redis/redis.module';
         password: config.get<string>('database.password'),
         database: config.get<string>('database.name'),
         autoLoadEntities: true,
+        timezone: '+08:00',
         synchronize: process.env.NODE_ENV !== 'production',
-        logging: process.env.NODE_ENV !== 'production',
+        logging:
+          process.env.TYPEORM_LOGGING === 'true'
+            ? true
+            : process.env.TYPEORM_LOGGING === 'false'
+              ? false
+              : process.env.TYPEORM_LOGGING
+                ? (process.env.TYPEORM_LOGGING.split(',') as any)
+                : ['error', 'warn'],
       }),
     }),
 
