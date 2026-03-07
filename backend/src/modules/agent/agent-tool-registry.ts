@@ -413,7 +413,7 @@ export class AgentToolRegistry {
           contentIds: {
             type: 'array',
             items: { type: 'string' },
-            description: '最终推送的内容 ID 列表（3-7 条）',
+            description: '最终推送的所有内容 ID 列表（传入所有已生成摘要的文章 ID，不限数量）',
           },
           agentNote: {
             type: 'string',

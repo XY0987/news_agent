@@ -33,7 +33,7 @@ export class AgentService {
   private readonly logger = new Logger(AgentService.name);
   private readonly openai: OpenAI;
   private readonly model: string;
-  private readonly maxSteps = 15;
+  private readonly maxSteps = 25;
   private readonly maxMessageRounds = 20;
 
   constructor(
@@ -454,11 +454,12 @@ ${JSON.stringify(user.profile || {}, null, 2)}
 ${JSON.stringify(user.preferences || {}, null, 2)}
 
 ## 决策约束
-- 推送所有评分过的内容（不限数量），邮件会自动按分数分区展示：高分（>=60）完整展开，低分折叠
+- **必须推送所有已生成摘要的文章**（不限数量），邮件会自动按 AI 评分分区展示：高分（>=60）完整展开，低分折叠
 - 评分和摘要需要分批处理：每次评分不超过 50 篇，摘要每批不超过 10 篇
 - 如果文章总数超过 50 篇，请分多次调用 score_contents 和 batch_generate_summaries
+- **关键**：每次 batch_generate_summaries 返回的 successIds 都要记录下来，最后传给 send_daily_digest 时要传入**全部 successIds 的合集**
 - 如果某个来源连续 3 天无相关内容，在报告中建议移除
-- 每次任务执行结束前，务必调用 send_daily_digest 发送推送，传入所有评分过的文章 ID
+- 每次任务执行结束前，务必调用 send_daily_digest 发送推送
 
 ## 重要提醒
 - 用户 ID 为: ${user.id}
@@ -507,7 +508,8 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
 1. 读取用户画像（了解兴趣偏好，以便 AI 生成个性化摘要和评分）
 2. 过滤去重（filter_and_dedup，设置合适的 daysWindow）
 3. 对过滤后的文章分批生成 AI 摘要+评分（batch_generate_summaries，每批最多 10 条）
-4. 发送推送（send_daily_digest，传入所有已分析的文章 ID）
+   - batch_generate_summaries 返回 successIds（成功的文章ID列表），你需要**收集所有批次的 successIds**
+4. 发送推送（send_daily_digest，传入**所有批次汇总的 successIds**，即所有成功生成摘要的文章 ID）
 5. 记录本次决策经验（可选）
 
 ## 用户画像
@@ -517,9 +519,10 @@ ${JSON.stringify(user.profile || {}, null, 2)}
 ${JSON.stringify(user.preferences || {}, null, 2)}
 
 ## 决策约束
-- 推送所有已生成摘要的文章（不限数量），邮件会自动按 AI 评分分区展示：高分（>=60）完整展开，低分折叠
+- **必须推送所有已生成摘要的文章**（不限数量），邮件会自动按 AI 评分分区展示：高分（>=60）完整展开，低分折叠
 - 摘要需分批处理：每批不超过 10 条（内部会做 3 并发控制）
 - 如果文章总数超过 10 篇，请分多次调用 batch_generate_summaries
+- **关键**：每次 batch_generate_summaries 返回的 successIds 都要记录下来，最后传给 send_daily_digest 时要传入**全部 successIds 的合集**
 - 每次任务执行结束前，务必调用 send_daily_digest 发送推送
 - **不需要调用 score_contents 进行规则预评分**，因为 AI 摘要会直接产出最终评分。除非你想先快速筛选一批再精细分析
 
@@ -531,11 +534,11 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
 
   /**
    * 智能截断 Tool 结果，保留有意义的摘要而非半截 JSON
+   * 关键原则：ID 列表（successIds, contentIds, passedIds 等）必须完整保留，不能截断
    */
   private smartTruncateToolResult(result: any, maxLen: number): string {
     try {
       if (Array.isArray(result)) {
-        // 数组类型：保留前几项 + 总数统计
         const summary = {
           _truncated: true,
           totalItems: result.length,
@@ -547,20 +550,40 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
       }
 
       if (result && typeof result === 'object') {
-        // 对象类型：保留顶层字段，截断深层数据
+        // 优先保留 ID 列表字段（这些是 Agent 后续决策的关键数据）
+        const idFields = ['successIds', 'failedIds', 'contentIds', 'passedIds', 'filteredIds'];
         const summarized: Record<string, any> = { _truncated: true };
+
+        // 第一轮：保留所有 ID 列表和数值/布尔字段
         for (const [key, value] of Object.entries(result)) {
-          if (typeof value === 'string') {
-            summarized[key] = value.length > 500 ? value.slice(0, 500) + '...' : value;
-          } else if (Array.isArray(value)) {
-            summarized[key] = { count: value.length, first3: value.slice(0, 3) };
+          if (idFields.includes(key) && Array.isArray(value)) {
+            // ID 列表完整保留，不截断
+            summarized[key] = value;
           } else if (typeof value === 'number' || typeof value === 'boolean') {
             summarized[key] = value;
-          } else {
-            const valStr = JSON.stringify(value);
-            summarized[key] = valStr.length > 300 ? valStr.slice(0, 300) + '...' : value;
+          } else if (typeof value === 'string') {
+            summarized[key] = value.length > 300 ? value.slice(0, 300) + '...' : value;
           }
         }
+
+        // 检查当前大小，如果还有余量再加入 details 等字段
+        const currentStr = JSON.stringify(summarized);
+        if (currentStr.length < maxLen * 0.8) {
+          for (const [key, value] of Object.entries(result)) {
+            if (key in summarized || idFields.includes(key)) continue;
+            if (Array.isArray(value)) {
+              // 非 ID 数组只保留前 5 项 + 总数
+              summarized[key] = { count: value.length, first5: value.slice(0, 5) };
+            } else if (value && typeof value === 'object') {
+              const valStr = JSON.stringify(value);
+              summarized[key] = valStr.length > 300 ? valStr.slice(0, 300) + '...' : value;
+            }
+            // 检查是否接近上限
+            const newStr = JSON.stringify(summarized);
+            if (newStr.length > maxLen * 0.9) break;
+          }
+        }
+
         const str = JSON.stringify(summarized);
         return str.length > maxLen ? str.slice(0, maxLen - 20) + '...(截断)' : str;
       }
@@ -755,12 +778,28 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
 
       this.logger.warn(`[${sessionId}] Agent 分析模式达到最大步数限制 (${this.maxSteps})`);
 
+      // 如果步数耗尽但未发送推送，触发兜底
+      if (!digestSent) {
+        this.logger.warn(`[${sessionId}] Agent 分析模式未完成推送，触发兜底安全网`);
+        const fallbackResult = await this.runFallback(userId, sessionId);
+        return {
+          sessionId,
+          report: `Agent 分析达到最大步数限制，触发兜底推送。${fallbackResult.message}`,
+          stepsUsed: steps.length,
+          totalDurationMs: Date.now() - startTime,
+          isSuccess: false,
+          isFallback: true,
+          digestSent: fallbackResult.success,
+          contentCount: fallbackResult.contentCount,
+        };
+      }
+
       return {
         sessionId,
-        report: `Agent 分析在 ${this.maxSteps} 步内完成${digestSent ? '，已发送推送' : '，但未发送推送'}`,
+        report: `Agent 分析在 ${this.maxSteps} 步内完成，已发送推送`,
         stepsUsed: steps.length,
         totalDurationMs: totalDuration,
-        isSuccess: digestSent,
+        isSuccess: true,
         isFallback: false,
         digestSent,
         contentCount,

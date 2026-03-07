@@ -100,31 +100,64 @@ export class SummaryService {
 
   /**
    * 批量生成摘要
+   * 返回精简结果给 Agent（完整数据已持久化到 DB），避免大量文本导致 Agent 消息截断
    */
   async batchGenerateSummaries(
     contentIds: string[],
     userId: string,
-  ): Promise<{ results: SummaryResult[]; summary: string }> {
-    const results: SummaryResult[] = [];
+  ): Promise<{
+    successIds: string[];
+    failedIds: string[];
+    totalRequested: number;
+    totalSuccess: number;
+    totalFailed: number;
+    details: { contentId: string; relevanceScore: number; finalScore: number }[];
+    summary: string;
+  }> {
+    const successIds: string[] = [];
+    const failedIds: string[] = [];
+    const details: { contentId: string; relevanceScore: number; finalScore: number }[] = [];
 
     // 控制并发，每次最多 3 个并行
     const batchSize = 3;
     for (let i = 0; i < contentIds.length; i += batchSize) {
       const batch = contentIds.slice(i, i + batchSize);
       const batchResults = await Promise.all(
-        batch.map((id) =>
-          this.generateSummary(id, userId).catch((err) => {
-            this.logger.error(`摘要生成失败 ${id}: ${err.message}`);
-            return null;
-          }),
-        ),
+        batch.map(async (id) => {
+          try {
+            const result = await this.generateSummary(id, userId);
+            return { id, result };
+          } catch (err) {
+            this.logger.error(`摘要生成失败 ${id}: ${(err as Error).message}`);
+            return { id, result: null };
+          }
+        }),
       );
-      results.push(...batchResults.filter((r): r is SummaryResult => r !== null));
+
+      for (const { id, result } of batchResults) {
+        if (result) {
+          successIds.push(id);
+          // 计算 finalScore（与 updateContentScore 相同的权重）
+          const bd = result.scoreBreakdown;
+          const finalScore = Math.round(
+            (bd.relevance * 0.45 + bd.quality * 0.2 + bd.timeliness * 0.2 +
+              bd.novelty * 0.1 + bd.actionability * 0.05) * 100,
+          ) / 100;
+          details.push({ contentId: id, relevanceScore: result.relevanceScore, finalScore });
+        } else {
+          failedIds.push(id);
+        }
+      }
     }
 
     return {
-      results,
-      summary: `成功生成 ${results.length}/${contentIds.length} 篇摘要`,
+      successIds,
+      failedIds,
+      totalRequested: contentIds.length,
+      totalSuccess: successIds.length,
+      totalFailed: failedIds.length,
+      details,
+      summary: `成功生成 ${successIds.length}/${contentIds.length} 篇 AI 摘要+评分${failedIds.length > 0 ? `，${failedIds.length} 篇失败` : ''}`,
     };
   }
 
