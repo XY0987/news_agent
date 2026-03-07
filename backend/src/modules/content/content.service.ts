@@ -84,17 +84,38 @@ export class ContentService {
         isSelected: true,
         createdAt: MoreThanOrEqual(today),
       },
-      relations: ['contentItem'],
+      relations: ['contentItem', 'contentItem.source'],
       order: { finalScore: 'DESC' },
       take: 10,
     });
 
-    return scores.map((s) => ({
-      content: s.contentItem,
-      score: s.finalScore,
-      breakdown: s.scoreBreakdown,
-      selectionReason: s.selectionReason,
-    }));
+    const contentIds = scores.map((s) => s.contentId);
+    const interactions =
+      contentIds.length > 0
+        ? await this.interactionRepo.find({
+            where: contentIds.map((cid) => ({ contentId: cid, userId })),
+          })
+        : [];
+    const interMap = new Map(interactions.map((i) => [i.contentId, i]));
+
+    return scores.map((s) => {
+      const c = s.contentItem;
+      const inter = interMap.get(s.contentId);
+      return {
+        id: c.id,
+        title: c.title,
+        url: c.url,
+        author: c.author,
+        sourceName: c.source?.name || c.metadata?.sourceName || '',
+        sourceType: c.source?.type || c.metadata?.sourceType || '',
+        publishedAt: c.publishedAt,
+        score: s.finalScore,
+        scoreBreakdown: s.scoreBreakdown,
+        summary: inter?.summary || '',
+        suggestions: inter?.suggestions || [],
+        tags: c.metadata?.tags || [],
+      };
+    });
   }
 
   async getContentWithScore(contentId: string, userId: string) {
