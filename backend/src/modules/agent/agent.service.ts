@@ -186,9 +186,10 @@ export class AgentService {
 
                 const resultStr = JSON.stringify(result);
                 // 截断过长的结果以避免 token 超限
+                // 使用智能截断：保留完整 JSON 结构摘要而非粗暴截断
                 const truncatedResult =
                   resultStr.length > 8000
-                    ? resultStr.slice(0, 8000) + '...(结果已截断)'
+                    ? this.smartTruncateToolResult(result, 8000)
                     : resultStr;
 
                 toolResults.push({
@@ -413,9 +414,9 @@ export class AgentService {
 ### 行动类工具
 - collect_wechat: 从微信公众号采集最新文章
 - filter_and_dedup: 对内容进行去重和过滤
-- score_contents: 对内容进行多维度评分
-- generate_summary: 为单篇内容生成摘要（LLM 调用，高成本）
-- batch_generate_summaries: 批量生成摘要（建议不超过 10 条）
+- score_contents: 对内容进行初步规则评分（快速预筛，非最终评分）
+- generate_summary: 为单篇内容生成 AI 摘要+精准 AI 评分（会覆盖规则评分）
+- batch_generate_summaries: 批量生成 AI 摘要+评分（建议不超过 10 条）
 - get_recent_contents: 获取最近采集的内容列表
 
 ### 推送类工具
@@ -453,16 +454,330 @@ ${JSON.stringify(user.profile || {}, null, 2)}
 ${JSON.stringify(user.preferences || {}, null, 2)}
 
 ## 决策约束
-- 最终推送内容数量: 3-7 条（质量优先，不凑数）
-- 只推送与用户相关的内容（相关性评分 > 60）
+- 推送所有评分过的内容（不限数量），邮件会自动按分数分区展示：高分（>=60）完整展开，低分折叠
+- 评分和摘要需要分批处理：每次评分不超过 50 篇，摘要每批不超过 10 篇
+- 如果文章总数超过 50 篇，请分多次调用 score_contents 和 batch_generate_summaries
 - 如果某个来源连续 3 天无相关内容，在报告中建议移除
-- 摘要生成只对 Top 10 以内的内容调用（控制 LLM 成本）
-- 每次任务执行结束前，务必调用 send_daily_digest 发送推送
+- 每次任务执行结束前，务必调用 send_daily_digest 发送推送，传入所有评分过的文章 ID
 
 ## 重要提醒
 - 用户 ID 为: ${user.id}
 - 所有需要 userId 参数的 Tool 调用，请使用上面的用户 ID
 - 任务完成后请输出执行报告，包括采集数量、过滤数量、推送数量等关键信息`;
+  }
+
+  /**
+   * 分析模式专用 System Prompt — 跳过采集，直接分析已有文章
+   */
+  private buildAnalysisSystemPrompt(user: any): string {
+    return `你是一个智能信息管家 Agent。当前处于**分析模式**：数据库中已有采集好的文章，你需要对它们进行高质量的 AI 分析和推送。
+
+## 重要：本次任务不需要采集
+数据库中已有文章，不要调用 collect_wechat。直接从过滤开始工作。
+
+## 你的能力（Tools）
+
+### 感知类工具
+- read_user_profile: 读取用户画像和偏好设置
+- read_feedback_history: 读取用户最近的反馈记录
+- query_memory: 查询历史决策经验和记忆
+- get_user_sources: 获取用户的数据源列表
+
+### 行动类工具
+- filter_and_dedup: 对内容进行去重和过滤（从数据库获取指定时间窗口内的文章）
+- score_contents: 对内容进行初步规则评分（快速预筛，非最终评分）
+- generate_summary: 为单篇内容生成 AI 摘要和精准评分（LLM 调用，会产出最终的 AI 评分并覆盖规则评分）
+- batch_generate_summaries: 批量生成 AI 摘要和评分（建议每批不超过 10 条，内部并发控制为 3）
+- get_recent_contents: 获取最近采集的内容列表
+
+### 推送类工具
+- send_daily_digest: 发送每日精选推送
+
+### 记忆类工具
+- store_memory: 存储决策经验和观察
+- analyze_source_quality: 分析来源质量
+- suggest_source_change: 生成来源管理建议
+
+## 评分机制说明
+- score_contents 是基于规则的快速预评分（关键词匹配、时间衰减等），**不够准确**
+- batch_generate_summaries / generate_summary 在生成摘要时会**同时让 AI 产出精准的多维度评分**，并自动覆盖规则评分
+- 因此最终评分以 AI 摘要生成后的评分为准
+
+## 推荐工作流程
+1. 读取用户画像（了解兴趣偏好，以便 AI 生成个性化摘要和评分）
+2. 过滤去重（filter_and_dedup，设置合适的 daysWindow）
+3. 对过滤后的文章分批生成 AI 摘要+评分（batch_generate_summaries，每批最多 10 条）
+4. 发送推送（send_daily_digest，传入所有已分析的文章 ID）
+5. 记录本次决策经验（可选）
+
+## 用户画像
+${JSON.stringify(user.profile || {}, null, 2)}
+
+## 用户偏好
+${JSON.stringify(user.preferences || {}, null, 2)}
+
+## 决策约束
+- 推送所有已生成摘要的文章（不限数量），邮件会自动按 AI 评分分区展示：高分（>=60）完整展开，低分折叠
+- 摘要需分批处理：每批不超过 10 条（内部会做 3 并发控制）
+- 如果文章总数超过 10 篇，请分多次调用 batch_generate_summaries
+- 每次任务执行结束前，务必调用 send_daily_digest 发送推送
+- **不需要调用 score_contents 进行规则预评分**，因为 AI 摘要会直接产出最终评分。除非你想先快速筛选一批再精细分析
+
+## 重要提醒
+- 用户 ID 为: ${user.id}
+- 所有需要 userId 参数的 Tool 调用，请使用上面的用户 ID
+- 任务完成后请输出执行报告，包括过滤数量、AI 分析数量、推送数量等关键信息`;
+  }
+
+  /**
+   * 智能截断 Tool 结果，保留有意义的摘要而非半截 JSON
+   */
+  private smartTruncateToolResult(result: any, maxLen: number): string {
+    try {
+      if (Array.isArray(result)) {
+        // 数组类型：保留前几项 + 总数统计
+        const summary = {
+          _truncated: true,
+          totalItems: result.length,
+          firstItems: result.slice(0, 5),
+          message: `共 ${result.length} 项，仅展示前 5 项`,
+        };
+        const str = JSON.stringify(summary);
+        return str.length > maxLen ? str.slice(0, maxLen - 50) + '..."}' : str;
+      }
+
+      if (result && typeof result === 'object') {
+        // 对象类型：保留顶层字段，截断深层数据
+        const summarized: Record<string, any> = { _truncated: true };
+        for (const [key, value] of Object.entries(result)) {
+          if (typeof value === 'string') {
+            summarized[key] = value.length > 500 ? value.slice(0, 500) + '...' : value;
+          } else if (Array.isArray(value)) {
+            summarized[key] = { count: value.length, first3: value.slice(0, 3) };
+          } else if (typeof value === 'number' || typeof value === 'boolean') {
+            summarized[key] = value;
+          } else {
+            const valStr = JSON.stringify(value);
+            summarized[key] = valStr.length > 300 ? valStr.slice(0, 300) + '...' : value;
+          }
+        }
+        const str = JSON.stringify(summarized);
+        return str.length > maxLen ? str.slice(0, maxLen - 20) + '...(截断)' : str;
+      }
+    } catch {
+      // fallback
+    }
+    const str = JSON.stringify(result);
+    return str.slice(0, maxLen) + '...(结果已截断)';
+  }
+
+  /**
+   * AI 分析模式 — Agent Loop 决策（跳过采集）
+   * 与 runDailyDigest 相同的 Agent Loop，但 system prompt 指示跳过采集环节，
+   * 直接从数据库读取已有文章进行分析。
+   */
+  async runAnalysisOnly(
+    userId: string,
+    options?: { daysWindow?: number },
+  ): Promise<AgentResult> {
+    const sessionId = uuidv4();
+    const startTime = Date.now();
+    const daysWindow = options?.daysWindow ?? 1;
+
+    this.logger.log(`[${sessionId}] Agent 分析模式启动, userId=${userId}, daysWindow=${daysWindow}`);
+
+    try {
+      const user = await this.userService.findById(userId);
+      const tools = this.toolRegistry.getToolDefinitions();
+
+      // 构建分析模式专用的消息
+      const systemPrompt = this.buildAnalysisSystemPrompt(user);
+      const messages: OpenAI.ChatCompletionMessageParam[] = [
+        { role: 'system', content: systemPrompt },
+        {
+          role: 'user',
+          content: `执行 AI 分析任务（跳过采集，仅分析数据库中已有的文章）。
+当前时间: ${new Date().toISOString()}
+用户 ID: ${userId}
+用户名: ${user.name}
+分析时间范围: 最近 ${daysWindow} 天
+你的目标是对数据库中已有的文章进行高质量的 AI 分析、评分和推送。
+请自主决定执行步骤，合理使用可用工具。
+完成后输出最终的执行报告。`,
+        },
+      ];
+
+      const steps: AgentStep[] = [];
+      let digestSent = false;
+      let contentCount = 0;
+
+      // ========== Agent Loop ==========
+      for (let step = 0; step < this.maxSteps; step++) {
+        const stepStart = Date.now();
+
+        this.logger.log(`[${sessionId}] Step ${step + 1}: 调用 LLM...`);
+
+        let response: OpenAI.ChatCompletion;
+        try {
+          response = await this.openai.chat.completions.create({
+            model: this.model,
+            max_tokens: 4096,
+            messages,
+            tools: tools as OpenAI.ChatCompletionTool[],
+            tool_choice: 'auto',
+          });
+        } catch (error) {
+          this.logger.error(`[${sessionId}] LLM 调用失败: ${(error as Error).message}`);
+          break;
+        }
+
+        const choice = response.choices[0];
+        if (!choice) {
+          this.logger.error(`[${sessionId}] LLM 返回空响应`);
+          break;
+        }
+
+        const assistantMessage = choice.message;
+        const thinking = assistantMessage.content || '';
+        const toolCallsRaw = assistantMessage.tool_calls || [];
+
+        const toolCalls: AgentToolCall[] = toolCallsRaw
+          .filter((tc): tc is OpenAI.ChatCompletionMessageToolCall & { type: 'function' } => tc.type === 'function')
+          .map((tc) => ({
+            id: tc.id,
+            name: tc.function.name,
+            args: JSON.parse(tc.function.arguments || '{}'),
+          }));
+
+        this.logger.log(
+          `[${sessionId}] Step ${step + 1}: 思考="${thinking.slice(0, 100)}...", Tool 调用=${toolCalls.length}个 [${toolCalls.map((t) => t.name).join(', ')}]`,
+        );
+
+        // 如果没有工具调用或 stop — 任务完成
+        if (toolCallsRaw.length === 0 || choice.finish_reason === 'stop') {
+          steps.push({
+            step: step + 1,
+            thinking,
+            toolCalls: [],
+            toolResults: [],
+            durationMs: Date.now() - stepStart,
+          });
+
+          const totalDuration = Date.now() - startTime;
+          await this.logAgentExecution(userId, sessionId, steps);
+
+          this.logger.log(`[${sessionId}] Agent 分析完成: ${steps.length} 步, ${totalDuration}ms`);
+
+          return {
+            sessionId,
+            report: thinking || '分析任务已完成',
+            stepsUsed: steps.length,
+            totalDurationMs: totalDuration,
+            isSuccess: true,
+            isFallback: false,
+            digestSent,
+            contentCount,
+          };
+        }
+
+        // 把 LLM 响应加入消息历史
+        messages.push(assistantMessage);
+
+        // 执行工具
+        const toolResults: AgentToolResult[] = [];
+        const toolResultMessages: OpenAI.ChatCompletionToolMessageParam[] =
+          await Promise.all(
+            toolCalls.map(async (tc) => {
+              const toolStart = Date.now();
+              try {
+                const result = await this.toolRegistry.executeTool(tc.name, tc.args);
+
+                if (tc.name === 'send_daily_digest' && result?.success) {
+                  digestSent = true;
+                  contentCount = tc.args?.contentIds?.length || 0;
+                }
+
+                const resultStr = JSON.stringify(result);
+                const truncatedResult =
+                  resultStr.length > 8000
+                    ? this.smartTruncateToolResult(result, 8000)
+                    : resultStr;
+
+                toolResults.push({
+                  toolUseId: tc.id,
+                  toolName: tc.name,
+                  result: truncatedResult,
+                  isError: false,
+                  durationMs: Date.now() - toolStart,
+                });
+
+                return {
+                  role: 'tool' as const,
+                  tool_call_id: tc.id,
+                  content: truncatedResult,
+                };
+              } catch (error) {
+                const errorMsg = `Tool 执行失败: ${(error as Error).message}`;
+                this.logger.error(`[${sessionId}] ${tc.name} 执行失败: ${(error as Error).message}`);
+
+                toolResults.push({
+                  toolUseId: tc.id,
+                  toolName: tc.name,
+                  result: errorMsg,
+                  isError: true,
+                  durationMs: Date.now() - toolStart,
+                });
+
+                return {
+                  role: 'tool' as const,
+                  tool_call_id: tc.id,
+                  content: errorMsg,
+                };
+              }
+            }),
+          );
+
+        steps.push({
+          step: step + 1,
+          thinking,
+          toolCalls,
+          toolResults,
+          durationMs: Date.now() - stepStart,
+        });
+
+        messages.push(...toolResultMessages);
+        this.pruneMessagesIfNeeded(messages);
+      }
+
+      // 达到上限
+      const totalDuration = Date.now() - startTime;
+      await this.logAgentExecution(userId, sessionId, steps);
+
+      this.logger.warn(`[${sessionId}] Agent 分析模式达到最大步数限制 (${this.maxSteps})`);
+
+      return {
+        sessionId,
+        report: `Agent 分析在 ${this.maxSteps} 步内完成${digestSent ? '，已发送推送' : '，但未发送推送'}`,
+        stepsUsed: steps.length,
+        totalDurationMs: totalDuration,
+        isSuccess: digestSent,
+        isFallback: false,
+        digestSent,
+        contentCount,
+      };
+    } catch (error) {
+      this.logger.error(`[${sessionId}] Agent 分析异常: ${(error as Error).message}`);
+      return {
+        sessionId,
+        report: `Agent 分析失败: ${(error as Error).message}`,
+        stepsUsed: 0,
+        totalDurationMs: Date.now() - startTime,
+        isSuccess: false,
+        isFallback: false,
+        digestSent: false,
+        contentCount: 0,
+      };
+    }
   }
 
   /**

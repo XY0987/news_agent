@@ -305,7 +305,7 @@ export class AgentToolRegistry {
     this.register({
       name: 'score_contents',
       description:
-        '对内容进行多维度评分（相关性、质量、时效性、新颖性、可操作性），返回带分数和分数拆解的内容列表，按总分降序排列。',
+        '对内容进行初步规则评分（基于关键词匹配、时间衰减等规则，非 AI 评分）。返回带分数和分数拆解的内容列表，按总分降序排列。注意：这只是粗略预评分，最终精准评分由 generate_summary / batch_generate_summaries 的 AI 评分产出并自动覆盖。',
       parameters: {
         type: 'object',
         properties: {
@@ -326,7 +326,7 @@ export class AgentToolRegistry {
     this.register({
       name: 'generate_summary',
       description:
-        '为单篇内容生成个性化摘要和行动建议。这是一个 LLM 调用，成本较高，只对 Top K 内容使用。返回摘要、关键点、行动建议等。',
+        '为单篇内容生成个性化 AI 摘要、多维度 AI 评分和行动建议。这是一个 LLM 调用，会自动将 AI 评分（relevance/quality/timeliness/novelty/actionability）写入数据库覆盖规则评分。返回摘要、AI 评分、关键点、行动建议等。',
       parameters: {
         type: 'object',
         properties: {
@@ -343,7 +343,7 @@ export class AgentToolRegistry {
     this.register({
       name: 'batch_generate_summaries',
       description:
-        '批量为多篇内容生成摘要和行动建议。内部会控制并发。建议不超过 10 条。',
+        '批量为多篇内容生成 AI 摘要、多维度 AI 评分和行动建议。内部会控制并发（3 并发）。每批建议不超过 10 条。AI 评分会自动写入数据库覆盖规则评分。',
       parameters: {
         type: 'object',
         properties: {

@@ -1,16 +1,24 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
 import { ContentEntity } from '../../common/database/entities/content.entity';
 import { UserEntity } from '../../common/database/entities/user.entity';
 import { UserContentInteractionEntity } from '../../common/database/entities/user-content-interaction.entity';
+import { ContentScoreEntity } from '../../common/database/entities/content-score.entity';
 
 export interface SummaryResult {
   contentId: string;
   summary: string;
   relevanceScore: number;
+  scoreBreakdown: {
+    relevance: number;
+    quality: number;
+    timeliness: number;
+    novelty: number;
+    actionability: number;
+  };
   keyPoints: string[];
   actionSuggestions: { type: string; suggestion: string }[];
   contentType: string;
@@ -30,6 +38,8 @@ export class SummaryService {
     private readonly userRepo: Repository<UserEntity>,
     @InjectRepository(UserContentInteractionEntity)
     private readonly interactionRepo: Repository<UserContentInteractionEntity>,
+    @InjectRepository(ContentScoreEntity)
+    private readonly scoreRepo: Repository<ContentScoreEntity>,
     private readonly configService: ConfigService,
   ) {
     const baseURL = this.configService.get<string>('LLM_URL') || 'https://api.openai.com/v1';
@@ -54,10 +64,13 @@ export class SummaryService {
     // 检查是否已有缓存的摘要
     const existing = await this.interactionRepo.findOneBy({ contentId, userId });
     if (existing && existing.summary) {
+      // 读取已有的 AI 评分
+      const existingScore = await this.scoreRepo.findOneBy({ contentId, userId });
       return {
         contentId,
         summary: existing.summary,
         relevanceScore: existing.score || 0,
+        scoreBreakdown: existingScore?.scoreBreakdown as any || { relevance: 0, quality: 0, timeliness: 0, novelty: 0, actionability: 0 },
         keyPoints: [],
         actionSuggestions: (existing.suggestions as any) || [],
         contentType: 'cached',
@@ -74,6 +87,9 @@ export class SummaryService {
       interaction.suggestions = result.actionSuggestions as any;
       interaction.score = result.relevanceScore;
       await this.interactionRepo.save(interaction);
+
+      // 回写 AI 评分到 content_scores 表
+      await this.updateContentScore(contentId, userId, result);
 
       return result;
     } catch (error) {
@@ -133,19 +149,24 @@ ${JSON.stringify(profile, null, 2)}
 ## 原文标题
 ${content.title}
 
-## 原文内容
+## 原文内容（发布时间: ${content.publishedAt ? new Date(content.publishedAt).toISOString() : '未知'}）
 ${textContent}
 
 ## 任务
 1. 生成适合该用户的内容摘要（200-300字）
-2. 评估内容与用户的相关度(0-100分)
+2. 多维度评分（每项 0-100 分）：
+   - relevance: 与用户兴趣/职业的语义相关度（核心指标，严格评估）
+   - quality: 内容质量（深度、准确性、结构性、是否有干货）
+   - timeliness: 时效性（是否为近期热点、前沿动态）
+   - novelty: 新颖性（是否提供新视角、新知识，非老生常谈）
+   - actionability: 可操作性（是否能直接指导实践、学习）
 3. 提取关键技术点/知识点（3-5个）
 4. 给出 2-3 个具体的行动建议
 5. 判断内容类型
 6. 提取标签
 
 直接输出以下格式的 JSON，不要有任何多余文字：
-{"summary":"...","relevance_score":80,"key_points":["...","..."],"action_suggestions":[{"type":"learn","suggestion":"..."},{"type":"practice","suggestion":"..."}],"content_type":"new_technology","tags":["AI","LLM"]}`;
+{"summary":"...","relevance_score":80,"score_breakdown":{"relevance":80,"quality":75,"timeliness":60,"novelty":70,"actionability":65},"key_points":["...","..."],"action_suggestions":[{"type":"learn","suggestion":"..."},{"type":"practice","suggestion":"..."}],"content_type":"new_technology","tags":["AI","LLM"]}`;
 
     const response = await this.openai.chat.completions.create({
       model: this.model,
@@ -166,10 +187,20 @@ ${textContent}
     // 尝试多种方式提取 JSON
     const parsed = this.extractJson(text);
 
+    const defaultBreakdown = { relevance: 50, quality: 50, timeliness: 50, novelty: 50, actionability: 50 };
+    const breakdown = parsed.score_breakdown || defaultBreakdown;
+
     return {
       contentId: content.id,
       summary: parsed.summary || '',
       relevanceScore: parsed.relevance_score || 50,
+      scoreBreakdown: {
+        relevance: breakdown.relevance ?? 50,
+        quality: breakdown.quality ?? 50,
+        timeliness: breakdown.timeliness ?? 50,
+        novelty: breakdown.novelty ?? 50,
+        actionability: breakdown.actionability ?? 50,
+      },
       keyPoints: parsed.key_points || [],
       actionSuggestions: parsed.action_suggestions || [],
       contentType: parsed.content_type || 'unknown',
@@ -215,6 +246,55 @@ ${textContent}
   }
 
   /**
+   * 将 AI 评分回写到 content_scores 表
+   * 使用加权公式计算 finalScore，与原 ScorerService 的权重保持一致
+   */
+  private async updateContentScore(
+    contentId: string,
+    userId: string,
+    result: SummaryResult,
+  ): Promise<void> {
+    try {
+      const weights = {
+        relevance: 0.45,
+        quality: 0.2,
+        timeliness: 0.2,
+        novelty: 0.1,
+        actionability: 0.05,
+      };
+
+      const bd = result.scoreBreakdown;
+      const finalScore = Math.round(
+        (bd.relevance * weights.relevance +
+          bd.quality * weights.quality +
+          bd.timeliness * weights.timeliness +
+          bd.novelty * weights.novelty +
+          bd.actionability * weights.actionability) * 100,
+      ) / 100;
+
+      let scoreEntity = await this.scoreRepo.findOneBy({ contentId, userId });
+
+      if (scoreEntity) {
+        scoreEntity.finalScore = finalScore;
+        scoreEntity.scoreBreakdown = { ...bd, source: 'ai' };
+      } else {
+        scoreEntity = this.scoreRepo.create({
+          contentId,
+          userId,
+          finalScore,
+          scoreBreakdown: { ...bd, source: 'ai' },
+          isSelected: false,
+        });
+      }
+
+      await this.scoreRepo.save(scoreEntity);
+      this.logger.log(`AI 评分回写: contentId=${contentId}, finalScore=${finalScore}`);
+    } catch (error) {
+      this.logger.warn(`AI 评分回写失败: ${(error as Error).message}`);
+    }
+  }
+
+  /**
    * 降级摘要：LLM 失败时使用规则生成
    */
   private fallbackSummary(content: ContentEntity): SummaryResult {
@@ -226,6 +306,7 @@ ${textContent}
       contentId: content.id,
       summary: `【规则摘要】${content.title}\n${summary}`,
       relevanceScore: 50,
+      scoreBreakdown: { relevance: 50, quality: 50, timeliness: 50, novelty: 50, actionability: 50 },
       keyPoints: [],
       actionSuggestions: [],
       contentType: 'unknown',

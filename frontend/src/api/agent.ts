@@ -5,6 +5,12 @@ export const agentApi = {
     return apiClient.post("/agent/run", { userId }).then((r) => r.data);
   },
 
+  analyze(userId: string, daysWindow?: number) {
+    return apiClient
+      .post("/agent/analyze", { userId, daysWindow })
+      .then((r) => r.data);
+  },
+
   getLogs(userId: string, limit?: number) {
     return apiClient
       .get("/agent/logs", { params: { userId, limit } })

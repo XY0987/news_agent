@@ -9,6 +9,8 @@ import {
   Eye,
   EyeOff,
   Save,
+  Brain,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,6 +24,13 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { agentApi } from "@/api/agent";
 import { systemApi } from "@/api/notification";
@@ -38,6 +47,9 @@ interface CredentialStatus {
 export function SettingsPage() {
   const [syncing, setSyncing] = useState(false);
   const [runningAgent, setRunningAgent] = useState(false);
+  const [runningAnalysis, setRunningAnalysis] = useState(false);
+  const [analysisDays, setAnalysisDays] = useState("1");
+  const [analysisResult, setAnalysisResult] = useState<string | null>(null);
   const [token, setToken] = useState("");
   const [cookie, setCookie] = useState("");
   const [saving, setSaving] = useState(false);
@@ -94,6 +106,31 @@ export function SettingsPage() {
     }
   };
 
+  const handleRunAnalysis = async () => {
+    setRunningAnalysis(true);
+    setAnalysisResult(null);
+    try {
+      const res = await agentApi.analyze(
+        DEFAULT_USER_ID,
+        parseInt(analysisDays, 10)
+      );
+      const data = res.data;
+      setAnalysisResult(data?.report || "分析完成");
+      toast({
+        title: "AI 分析完成",
+        description: `${data?.contentCount || 0} 篇文章已分析并推送`,
+      });
+    } catch (e: unknown) {
+      toast({
+        title: "AI 分析失败",
+        description: (e as Error).message,
+        variant: "destructive",
+      });
+    } finally {
+      setRunningAnalysis(false);
+    }
+  };
+
   const handleSaveCredentials = async () => {
     if (!token.trim() || !cookie.trim()) {
       toast({
@@ -106,7 +143,10 @@ export function SettingsPage() {
     setSaving(true);
     try {
       await wechatApi.updateCredentials(token.trim(), cookie.trim());
-      toast({ title: "凭证已更新", description: "微信 Token 和 Cookie 已保存到 Redis" });
+      toast({
+        title: "凭证已更新",
+        description: "微信 Token 和 Cookie 已保存到 Redis",
+      });
       setToken("");
       setCookie("");
       fetchStatus();
@@ -146,7 +186,9 @@ export function SettingsPage() {
             </div>
             {!loadingStatus && credStatus && (
               <Badge
-                variant={credStatus.hasCredentials ? "default" : "destructive"}
+                variant={
+                  credStatus.hasCredentials ? "default" : "destructive"
+                }
                 className="shrink-0"
               >
                 {credStatus.hasCredentials ? (
@@ -175,7 +217,8 @@ export function SettingsPage() {
               onChange={(e) => setToken(e.target.value)}
             />
             <p className="text-xs text-muted-foreground">
-              登录 mp.weixin.qq.com → 打开 DevTools → Network → 找到任意请求中的 token 参数
+              登录 mp.weixin.qq.com → 打开 DevTools → Network →
+              找到任意请求中的 token 参数
             </p>
           </div>
           <div className="space-y-2">
@@ -214,7 +257,8 @@ export function SettingsPage() {
               />
             )}
             <p className="text-xs text-muted-foreground">
-              DevTools → Application → Cookies → mp.weixin.qq.com，或从请求 Headers 中复制
+              DevTools → Application → Cookies → mp.weixin.qq.com，或从请求
+              Headers 中复制
             </p>
           </div>
           <Button
@@ -229,6 +273,61 @@ export function SettingsPage() {
             )}
             保存凭证
           </Button>
+        </CardContent>
+      </Card>
+
+      {/* AI 分析模块 */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Brain className="h-5 w-5" />
+            AI 分析
+          </CardTitle>
+          <CardDescription>
+            跳过采集，直接对已有文章进行 AI
+            评分、摘要生成和邮件推送。适用于文章已爬取、只需分析的场景。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center gap-3">
+            <div className="space-y-1 flex-1">
+              <Label>分析时间范围</Label>
+              <Select value={analysisDays} onValueChange={setAnalysisDays}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="1">今天 (最近 1 天)</SelectItem>
+                  <SelectItem value="2">最近 2 天</SelectItem>
+                  <SelectItem value="3">最近 3 天</SelectItem>
+                  <SelectItem value="7">最近 7 天</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            将对选定时间范围内的所有文章进行分批评分和摘要生成，完成后自动邮件推送。高分文章完整展开，低分文章折叠显示。
+          </p>
+          <Button
+            onClick={handleRunAnalysis}
+            disabled={runningAnalysis}
+            className="w-full"
+          >
+            {runningAnalysis ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Sparkles className="h-4 w-4 mr-2" />
+            )}
+            {runningAnalysis ? "分析中...（可能需要几分钟）" : "开始 AI 分析"}
+          </Button>
+          {analysisResult && (
+            <div className="bg-muted/50 rounded-lg p-3 text-sm">
+              <p className="font-medium text-xs text-muted-foreground mb-1">
+                分析结果
+              </p>
+              <p className="text-sm">{analysisResult}</p>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -264,7 +363,7 @@ export function SettingsPage() {
             <div>
               <p className="font-medium text-sm">运行 Agent</p>
               <p className="text-xs text-muted-foreground">
-                手动触发 Agent 执行完整推荐流程
+                手动触发 Agent 执行完整推荐流程（采集 + 分析 + 推送）
               </p>
             </div>
             <Button

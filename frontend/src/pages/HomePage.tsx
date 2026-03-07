@@ -1,13 +1,22 @@
-import { useEffect } from "react";
-import { Sparkles, RefreshCw, Loader2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import {
+  Sparkles,
+  RefreshCw,
+  Loader2,
+  ChevronDown,
+  ChevronRight,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ContentCard } from "@/components/content/ContentCard";
 import { useContentStore } from "@/store";
 import { DEFAULT_USER_ID } from "@/utils";
 
+const HIGH_SCORE_THRESHOLD = 60;
+
 export function HomePage() {
   const { digest, loading, error, fetchDigest, submitFeedback } =
     useContentStore();
+  const [showLowScore, setShowLowScore] = useState(false);
 
   useEffect(() => {
     fetchDigest(DEFAULT_USER_ID);
@@ -22,6 +31,13 @@ export function HomePage() {
       type,
     });
   };
+
+  const highScoreItems = digest.filter(
+    (c) => c.score >= HIGH_SCORE_THRESHOLD
+  );
+  const lowScoreItems = digest.filter(
+    (c) => c.score < HIGH_SCORE_THRESHOLD
+  );
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -72,15 +88,49 @@ export function HomePage() {
       ) : (
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            共 {digest.length} 条精选内容
+            共 {digest.length} 篇 · 精选推荐 {highScoreItems.length} 篇
+            {lowScoreItems.length > 0 &&
+              ` · 其他 ${lowScoreItems.length} 篇`}
           </p>
-          {digest.map((content) => (
+
+          {highScoreItems.map((content) => (
             <ContentCard
               key={content.id}
               content={content}
               onFeedback={handleFeedback}
             />
           ))}
+
+          {lowScoreItems.length > 0 && (
+            <div className="pt-2">
+              <Button
+                variant="ghost"
+                className="w-full justify-between text-muted-foreground hover:text-foreground"
+                onClick={() => setShowLowScore(!showLowScore)}
+              >
+                <span className="text-sm">
+                  更多文章 ({lowScoreItems.length} 篇，评分 &lt;{" "}
+                  {HIGH_SCORE_THRESHOLD})
+                </span>
+                {showLowScore ? (
+                  <ChevronDown className="h-4 w-4" />
+                ) : (
+                  <ChevronRight className="h-4 w-4" />
+                )}
+              </Button>
+              {showLowScore && (
+                <div className="space-y-3 mt-3">
+                  {lowScoreItems.map((content) => (
+                    <ContentCard
+                      key={content.id}
+                      content={content}
+                      onFeedback={handleFeedback}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

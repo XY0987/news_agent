@@ -149,7 +149,6 @@ export class ContentService {
       },
       relations: ['contentItem', 'contentItem.source'],
       order: { finalScore: 'DESC' },
-      take: 10,
     });
 
     const contentIds = scores.map((s) => s.contentId);

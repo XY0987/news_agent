@@ -18,6 +18,14 @@ class RunAgentDto {
   userId: string;
 }
 
+class RunAnalysisDto {
+  @IsString()
+  @IsNotEmpty()
+  userId: string;
+
+  daysWindow?: number;
+}
+
 /**
  * Agent 交互接口
  * - POST /api/agent/run          手动触发 Agent 执行（调试用）
@@ -55,6 +63,38 @@ export class AgentController {
         {
           success: false,
           message: `Agent 执行失败: ${(error as Error).message}`,
+        },
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
+   * POST /api/agent/analyze
+   * 仅执行 AI 分析（跳过采集），对已有文章进行评分+摘要+推送
+   */
+  @Post('analyze')
+  async runAnalysis(@Body() body: RunAnalysisDto) {
+    if (!body.userId) {
+      throw new HttpException('userId is required', HttpStatus.BAD_REQUEST);
+    }
+
+    this.logger.log(`手动触发 AI 分析: userId=${body.userId}, daysWindow=${body.daysWindow || 1}`);
+
+    try {
+      const result = await this.agentService.runAnalysisOnly(body.userId, {
+        daysWindow: body.daysWindow || 1,
+      });
+      return {
+        success: true,
+        data: result,
+      };
+    } catch (error) {
+      this.logger.error(`AI 分析失败: ${(error as Error).message}`);
+      throw new HttpException(
+        {
+          success: false,
+          message: `AI 分析失败: ${(error as Error).message}`,
         },
         HttpStatus.INTERNAL_SERVER_ERROR,
       );

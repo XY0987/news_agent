@@ -122,6 +122,7 @@ export class EmailChannel {
 
   /**
    * 渲染每日精选 HTML 邮件
+   * 高分文章（>=60）完整展开，低分文章折叠（需点击展开查看）
    */
   private renderDigestHtml(data: {
     date: string;
@@ -137,9 +138,11 @@ export class EmailChannel {
       actionSuggestions: { type: string; suggestion: string }[];
     }[];
   }): string {
-    const itemsHtml = data.items
-      .map(
-        (item) => `
+    const HIGH_SCORE_THRESHOLD = 60;
+    const highItems = data.items.filter(i => i.finalScore >= HIGH_SCORE_THRESHOLD);
+    const lowItems = data.items.filter(i => i.finalScore < HIGH_SCORE_THRESHOLD);
+
+    const renderFullItem = (item: typeof data.items[0]) => `
       <div style="margin-bottom:24px;padding:20px;background:#fff;border-radius:8px;border:1px solid #e5e7eb;">
         <h3 style="margin:0 0 8px;font-size:18px;color:#1a1a1a;">
           <a href="${this.escapeHtml(item.url)}" style="color:#2563eb;text-decoration:none;" target="_blank">
@@ -165,9 +168,39 @@ export class EmailChannel {
         <div style="margin-top:12px;">
           <a href="${this.escapeHtml(item.url)}" style="display:inline-block;padding:6px 16px;background:#2563eb;color:#fff;border-radius:4px;font-size:13px;text-decoration:none;" target="_blank">阅读原文 →</a>
         </div>
-      </div>`,
-      )
-      .join('');
+      </div>`;
+
+    const renderCollapsedItem = (item: typeof data.items[0]) => `
+      <div style="margin-bottom:8px;padding:12px 16px;background:#fff;border-radius:6px;border:1px solid #e5e7eb;">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <div style="flex:1;min-width:0;">
+            <a href="${this.escapeHtml(item.url)}" style="color:#374151;text-decoration:none;font-size:14px;font-weight:500;" target="_blank">
+              ${this.escapeHtml(item.title)}
+            </a>
+            <div style="font-size:12px;color:#9ca3af;margin-top:2px;">
+              ${this.escapeHtml(item.author)} · 评分 ${item.finalScore}
+            </div>
+          </div>
+          <a href="${this.escapeHtml(item.url)}" style="display:inline-block;padding:4px 10px;background:#f3f4f6;color:#374151;border-radius:4px;font-size:12px;text-decoration:none;white-space:nowrap;margin-left:12px;" target="_blank">查看 →</a>
+        </div>
+      </div>`;
+
+    const highItemsHtml = highItems.map(renderFullItem).join('');
+
+    // 低分文章用 details/summary 实现折叠（兼容大多数邮件客户端）
+    const lowItemsHtml = lowItems.length > 0
+      ? `
+      <div style="margin-top:32px;">
+        <details>
+          <summary style="cursor:pointer;font-size:16px;font-weight:600;color:#6b7280;padding:8px 0;list-style:none;-webkit-appearance:none;">
+            📂 更多文章 (${lowItems.length} 篇，评分 &lt; ${HIGH_SCORE_THRESHOLD}) — 点击展开
+          </summary>
+          <div style="margin-top:12px;">
+            ${lowItems.map(renderCollapsedItem).join('')}
+          </div>
+        </details>
+      </div>`
+      : '';
 
     return `
 <!DOCTYPE html>
@@ -180,8 +213,12 @@ export class EmailChannel {
       <p style="margin:4px 0 0;font-size:14px;color:#6b7280;">${data.date}</p>
     </div>
     ${data.agentNote ? `<div style="background:#eff6ff;padding:12px 16px;border-radius:8px;margin-bottom:20px;font-size:14px;color:#1e40af;border-left:4px solid #3b82f6;">💡 ${this.escapeHtml(data.agentNote)}</div>` : ''}
-    <h2 style="font-size:18px;color:#1a1a1a;margin-bottom:16px;">🔥 今日推荐 (Top ${data.items.length})</h2>
-    ${itemsHtml}
+    <div style="font-size:13px;color:#6b7280;margin-bottom:16px;padding:8px 12px;background:#f9fafb;border-radius:6px;">
+      共 ${data.items.length} 篇文章 · 精选推荐 ${highItems.length} 篇 · 其他 ${lowItems.length} 篇
+    </div>
+    ${highItems.length > 0 ? `<h2 style="font-size:18px;color:#1a1a1a;margin-bottom:16px;">🔥 精选推荐 (${highItems.length} 篇)</h2>` : ''}
+    ${highItemsHtml}
+    ${lowItemsHtml}
     <div style="text-align:center;margin-top:32px;padding-top:16px;border-top:1px solid #e5e7eb;">
       <p style="font-size:12px;color:#9ca3af;">由 News Agent 智能精选推送</p>
     </div>
@@ -207,23 +244,38 @@ export class EmailChannel {
       actionSuggestions: { type: string; suggestion: string }[];
     }[];
   }): string {
-    let text = `每日精选 - ${data.date}\n${'='.repeat(40)}\n\n`;
+    const HIGH_SCORE_THRESHOLD = 60;
+    const highItems = data.items.filter(i => i.finalScore >= HIGH_SCORE_THRESHOLD);
+    const lowItems = data.items.filter(i => i.finalScore < HIGH_SCORE_THRESHOLD);
+
+    let text = `每日精选 - ${data.date}\n${'='.repeat(40)}\n`;
+    text += `共 ${data.items.length} 篇 · 精选 ${highItems.length} 篇 · 其他 ${lowItems.length} 篇\n\n`;
 
     if (data.agentNote) {
       text += `> ${data.agentNote}\n\n`;
     }
 
-    for (const item of data.items) {
-      text += `${item.index}. ${item.title}\n`;
-      text += `   来源: ${item.author} | 评分: ${item.finalScore}\n`;
-      if (item.summary) text += `   ${item.summary}\n`;
-      if (item.actionSuggestions.length > 0) {
-        text += `   行动建议:\n`;
-        for (const s of item.actionSuggestions) {
-          text += `   - ${s.suggestion}\n`;
+    if (highItems.length > 0) {
+      text += `🔥 精选推荐\n${'-'.repeat(30)}\n\n`;
+      for (const item of highItems) {
+        text += `${item.index}. ${item.title}\n`;
+        text += `   来源: ${item.author} | 评分: ${item.finalScore}\n`;
+        if (item.summary) text += `   ${item.summary}\n`;
+        if (item.actionSuggestions.length > 0) {
+          text += `   行动建议:\n`;
+          for (const s of item.actionSuggestions) {
+            text += `   - ${s.suggestion}\n`;
+          }
         }
+        text += `   链接: ${item.url}\n\n`;
       }
-      text += `   链接: ${item.url}\n\n`;
+    }
+
+    if (lowItems.length > 0) {
+      text += `\n📂 更多文章\n${'-'.repeat(30)}\n\n`;
+      for (const item of lowItems) {
+        text += `- ${item.title} (${item.author}, 评分${item.finalScore})\n  ${item.url}\n`;
+      }
     }
 
     return text;
