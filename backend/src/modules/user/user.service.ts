@@ -57,7 +57,11 @@ export class UserService {
 
   async updateProfile(id: string, dto: UpdateProfileDto): Promise<UserEntity> {
     const user = await this.findById(id);
-    user.profile = { ...user.profile, ...dto };
+    // 过滤掉 undefined 的属性，避免 spread 覆盖已有值
+    const clean = Object.fromEntries(
+      Object.entries(dto).filter(([, v]) => v !== undefined),
+    );
+    user.profile = { ...user.profile, ...clean };
     return this.userRepo.save(user);
   }
 
@@ -66,7 +70,10 @@ export class UserService {
     dto: UpdatePreferencesDto,
   ): Promise<UserEntity> {
     const user = await this.findById(id);
-    user.preferences = { ...user.preferences, ...dto };
+    const clean = Object.fromEntries(
+      Object.entries(dto).filter(([, v]) => v !== undefined),
+    );
+    user.preferences = { ...user.preferences, ...clean };
     return this.userRepo.save(user);
   }
 

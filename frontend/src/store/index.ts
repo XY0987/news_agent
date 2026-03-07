@@ -52,6 +52,7 @@ export const useUserStore = create<UserState>((set) => ({
       set({ user: res.data });
     } catch (e: unknown) {
       set({ error: (e as Error).message });
+      throw e;
     }
   },
 
@@ -61,6 +62,7 @@ export const useUserStore = create<UserState>((set) => ({
       set({ user: res.data });
     } catch (e: unknown) {
       set({ error: (e as Error).message });
+      throw e;
     }
   },
 

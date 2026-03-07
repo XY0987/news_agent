@@ -6,7 +6,6 @@ import {
   IsNumber,
   IsArray,
   IsObject,
-  ValidateNested,
 } from 'class-validator';
 
 export class CreateUserDto {
@@ -60,36 +59,48 @@ export class UpdateProfileDto {
   companyType?: string;
 
   @IsOptional()
-  @IsObject()
-  interests?: {
-    primary?: string[];
-    secondary?: string[];
-    excluded?: string[];
-  };
+  @IsArray()
+  @IsString({ each: true })
+  primaryInterests?: string[];
 
   @IsOptional()
-  @IsObject()
-  contentPreferences?: {
-    depth?: string;
-    formats?: string[];
-    languages?: string[];
-    freshness?: string;
-  };
+  @IsArray()
+  @IsString({ each: true })
+  secondaryInterests?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  excludeTags?: string[];
+
+  @IsOptional()
+  @IsString()
+  contentDepth?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  contentFormats?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  languages?: string[];
 }
 
 export class UpdatePreferencesDto {
   @IsOptional()
   @IsString()
-  pushFrequency?: string;
-
-  @IsOptional()
-  @IsString()
-  pushTime?: string;
+  notifyTime?: string;
 
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
-  pushChannels?: string[];
+  notifyChannels?: string[];
+
+  @IsOptional()
+  @IsNumber()
+  topN?: number;
 
   @IsOptional()
   @IsString()
@@ -100,6 +111,10 @@ export class UpdatePreferencesDto {
   quietHoursEnd?: string;
 
   @IsOptional()
+  @IsString()
+  pushFrequency?: string;
+
+  @IsOptional()
   @IsObject()
   scoreWeights?: {
     relevance?: number;
@@ -108,10 +123,6 @@ export class UpdatePreferencesDto {
     novelty?: number;
     actionability?: number;
   };
-
-  @IsOptional()
-  @IsNumber()
-  topN?: number;
 }
 
 export class UpdateNotificationSettingsDto {
