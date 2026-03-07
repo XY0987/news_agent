@@ -441,11 +441,11 @@ export class AgentService {
 3. 获取用户数据源列表
 4. 采集内容
 5. 过滤去重
-6. 评分排序
-7. 为 Top K 生成摘要
-8. 发送推送
-9. 分析来源质量（可选）
-10. 记录本次决策经验
+6. 对过滤后的**所有文章**分批生成 AI 摘要+评分（batch_generate_summaries，每批最多 10 条）
+   - AI 摘要会同时产出精准的多维度评分，不需要提前调用 score_contents
+7. 发送推送（传入所有 successIds）
+8. 分析来源质量（可选）
+9. 记录本次决策经验
 
 ## 用户画像
 ${JSON.stringify(user.profile || {}, null, 2)}

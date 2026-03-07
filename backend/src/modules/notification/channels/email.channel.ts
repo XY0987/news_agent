@@ -171,7 +171,7 @@ export class EmailChannel {
       </div>`;
 
     const renderCollapsedItem = (item: typeof data.items[0]) => `
-      <div style="margin-bottom:8px;padding:12px 16px;background:#fff;border-radius:6px;border:1px solid #e5e7eb;">
+      <div style="margin-bottom:12px;padding:14px 16px;background:#fff;border-radius:6px;border:1px solid #e5e7eb;">
         <div style="display:flex;align-items:center;justify-content:space-between;">
           <div style="flex:1;min-width:0;">
             <a href="${this.escapeHtml(item.url)}" style="color:#374151;text-decoration:none;font-size:14px;font-weight:500;" target="_blank">
@@ -183,6 +183,7 @@ export class EmailChannel {
           </div>
           <a href="${this.escapeHtml(item.url)}" style="display:inline-block;padding:4px 10px;background:#f3f4f6;color:#374151;border-radius:4px;font-size:12px;text-decoration:none;white-space:nowrap;margin-left:12px;" target="_blank">查看 →</a>
         </div>
+        ${item.summary ? `<p style="margin:8px 0 0;font-size:13px;color:#6b7280;line-height:1.5;">${this.escapeHtml(item.summary)}</p>` : ''}
       </div>`;
 
     const highItemsHtml = highItems.map(renderFullItem).join('');
