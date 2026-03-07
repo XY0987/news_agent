@@ -143,19 +143,36 @@ export class AgentService {
             durationMs: Date.now() - stepStart,
           });
 
-          // 记录日志并返回结果
-          const totalDuration = Date.now() - startTime;
+          // 记录日志
           await this.logAgentExecution(userId, sessionId, steps);
 
           this.logger.log(
-            `[${sessionId}] Agent 完成: ${steps.length} 步, ${totalDuration}ms`,
+            `[${sessionId}] Agent 完成: ${steps.length} 步, ${Date.now() - startTime}ms`,
           );
+
+          // 如果 Agent 自行结束但未发送推送，触发兜底安全网
+          if (!digestSent) {
+            this.logger.warn(
+              `[${sessionId}] Agent 自行结束但未完成推送，触发兜底安全网`,
+            );
+            const fallbackResult = await this.runFallback(userId, sessionId);
+            return {
+              sessionId,
+              report: `Agent 结束但未发送推送，已触发兜底。${fallbackResult.message}`,
+              stepsUsed: steps.length,
+              totalDurationMs: Date.now() - startTime,
+              isSuccess: false,
+              isFallback: true,
+              digestSent: fallbackResult.success,
+              contentCount: fallbackResult.contentCount,
+            };
+          }
 
           return {
             sessionId,
             report: thinking || '任务已完成',
             stepsUsed: steps.length,
-            totalDurationMs: totalDuration,
+            totalDurationMs: Date.now() - startTime,
             isSuccess: true,
             isFallback: false,
             digestSent,
