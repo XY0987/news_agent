@@ -15,67 +15,10 @@ services:
     build: ./backend
     ports:
       - "8000:8000"
-    environment:
-      - DATABASE_HOST=db
-      - DATABASE_PORT=3306
-      - DATABASE_USER=root
-      - DATABASE_PASSWORD=${DATABASE_PASSWORD:-password}
-      - DATABASE_NAME=newsagent
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_PASSWORD=
-      - LLM_URL=${LLM_URL:-https://api.openai.com/v1}
-      - LLM_API_KEY=${LLM_API_KEY:-}
-      - LLM_MODEL=${LLM_MODEL:-gpt-4o}
-      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
-      - WERSS_API_KEY=${WERSS_API_KEY:-}
-      - WECHAT_TOKEN=${WECHAT_TOKEN:-}
-      - WECHAT_COOKIE=${WECHAT_COOKIE:-}
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
-      - SMTP_HOST=${SMTP_HOST:-}
-      - SMTP_PORT=${SMTP_PORT:-465}
-      - SMTP_USER=${SMTP_USER:-}
-      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
-      - SMTP_FROM=${SMTP_FROM:-}
-      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-
-  # MySQL
-  db:
-    image: mysql:8.0
-    environment:
-      - MYSQL_ROOT_PASSWORD=${DATABASE_PASSWORD:-password}
-      - MYSQL_DATABASE=newsagent
-      - TZ=Asia/Shanghai
-    command: --default-time-zone='+08:00'
-    # ports:
-    #   - "3306:3306"
-    volumes:
-      - mysql_data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  # Redis
-  redis:
-    image: redis:7-alpine
-    # ports:
-    #   - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+    env_file:
+      - ./backend/.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
 volumes:
