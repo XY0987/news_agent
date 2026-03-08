@@ -18,26 +18,8 @@ services:
     env_file:
       - ./backend/.env
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
-    restart: unless-stopped
-
-  # MySQL（复用已有数据）
-  db:
-    image: mysql:5.7
-    environment:
-      - MYSQL_ROOT_PASSWORD=${DATABASE_PASSWORD:-password}
-      - TZ=Asia/Shanghai
-    command: --default-time-zone='+08:00'
-    volumes:
-      - ${MYSQL_DATA_PATH:-/your/local/mysql_data}:/var/lib/mysql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
     restart: unless-stopped
 
   # Redis
