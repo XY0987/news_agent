@@ -84,39 +84,100 @@ news_agent/
 
 ### 环境要求
 
-- **Node.js >= 22**（NestJS 11 + TS 5.7 + ES2023 需要）
-- MySQL 8.0+
-- Redis 7+
+- **Node.js >= 22**（NestJS 11 + TS 5.7 + ES2023 需要，仅本地开发）
+- Docker & Docker Compose
 - 一个兼容 OpenAI API 的 LLM 服务（DeepSeek、OpenRouter 等均可）
 
-### 方式一：Docker Compose（推荐）
+### 前置准备：启动 MySQL 和 Redis 容器
+
+项目不内置数据库容器，需要先在宿主机上创建并启动独立的 MySQL 和 Redis 容器。
+
+**首次创建：**
+
+```bash
+# MySQL 5.7
+docker run -d \
+  --name mysql-container \
+  -e MYSQL_ROOT_PASSWORD=你的密码 \
+  -p 3306:3306 \
+  -v ~/docker/mysql_data:/var/lib/mysql \
+  mysql:5.7
+
+# 创建项目数据库（首次需要）
+docker exec mysql-container mysql -u root -p你的密码 -e "CREATE DATABASE IF NOT EXISTS news_agent DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+
+# Redis 7
+docker run -d \
+  --name redis-container \
+  -p 6379:6379 \
+  -v ~/docker/redis/data:/data \
+  redis:7 \
+  redis-server --requirepass "你的密码" --appendonly yes
+```
+
+**日常启动/停止：**
+
+```bash
+# 启动
+docker start mysql-container redis-container
+
+# 停止
+docker stop mysql-container redis-container
+
+# 查看状态
+docker ps --filter "name=mysql-container" --filter "name=redis-container"
+```
+
+### 方式一：Docker Compose 部署（推荐）
+
+项目通过共享 Docker 网络（`news_agent_net`）让 API 容器直接通过容器名访问已有的 MySQL/Redis 容器，无需端口映射。
 
 ```bash
 git clone https://github.com/your-username/news-agent.git
 cd news-agent
 
-# 配置环境变量
+# 1. 配置环境变量
 cp backend/.env.example backend/.env
 # 编辑 backend/.env，填入 LLM API Key、SMTP 等配置
+# ⚠️ Docker 部署时 DATABASE_HOST 和 REDIS_HOST 必须填容器名：
+#   DATABASE_HOST=mysql-container
+#   REDIS_HOST=redis-container
+#   REDIS_PORT=6379（容器内部端口，非宿主机映射端口）
 
-# 一键启动
-docker compose up
+# 2. 一键启动（推荐使用 start.sh）
+bash start.sh
 ```
 
-访问 http://localhost:3000
+`start.sh` 会自动完成以下步骤：
+1. 启动 MySQL/Redis 外部容器
+2. 等待 MySQL 就绪
+3. `docker-compose up -d --build` 构建并启动前后端服务
+4. 将 mysql-container、redis-container 加入共享网络 `news_agent_net`
+5. 重启 api 容器确保数据库连接生效
+
+访问 http://localhost:3000（前端） | http://localhost:8000（后端 API）
+
+**停止服务：**
+
+```bash
+docker-compose down
+```
 
 ### 方式二：本地开发
+
+本地开发时，`backend/.env` 中的 HOST 需要改为实际可访问的地址（如 `127.0.0.1` 或远程 IP）。
 
 ```bash
 # 确认 Node 版本
 node -v  # 需要 >= 22
 
-# 启动 MySQL 和 Redis（自行安装或用 Docker）
-docker compose up db redis -d
+# 修改 backend/.env 中的数据库连接：
+#   DATABASE_HOST=127.0.0.1（或远程 IP）
+#   REDIS_HOST=127.0.0.1（或远程 IP）
+#   REDIS_PORT=6379（或宿主机映射的端口，如 6001）
 
 # 后端
 cd backend
-cp .env.example .env  # 编辑填入配置
 npm install
 npm run start:dev     # ⚠️ 不要用 ts-node 启动！
 
@@ -127,6 +188,8 @@ npm run dev
 ```
 
 前端: http://localhost:3000 | 后端: http://localhost:8000
+
+> **注意**：Docker 部署和本地开发使用不同的 HOST 配置。Docker 部署用容器名（`mysql-container`），本地开发用 IP 地址（`127.0.0.1` 或远程 IP）。切换时需修改 `backend/.env`。
 
 ## ⚙️ 环境变量配置
 
