@@ -17,12 +17,6 @@ services:
       - "8000:8000"
     env_file:
       - ./backend/.env
-    environment:
-      # Docker 容器内覆盖 HOST，通过宿主机转发访问本地/远程数据库
-      - DATABASE_HOST=host.docker.internal
-      - REDIS_HOST=host.docker.internal
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
 volumes: {}
