@@ -6,8 +6,6 @@ services:
     build: ./frontend
     ports:
       - "3000:80"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       - api
     restart: unless-stopped
@@ -15,9 +13,14 @@ services:
   # 后端 API（NestJS）
   api:
     build: ./backend
-    network_mode: host
+    ports:
+      - "8000:8000"
     env_file:
       - ./backend/.env
     restart: unless-stopped
 
-volumes: {}
+# 使用外部网络，让 api 容器能直接通过容器名访问已有的 mysql/redis 容器
+networks:
+  default:
+    name: news_agent_net
+    driver: bridge
