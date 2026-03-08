@@ -1,17 +1,16 @@
 version: '3.8'
 
 services:
-  # 前端（React SPA）
+  # 前端（React SPA + Nginx）
   frontend:
     build: ./frontend
     ports:
       - "3000:80"
-    environment:
-      - VITE_API_URL=http://localhost:8000
     depends_on:
       - api
+    restart: unless-stopped
 
-  # 后端 API（NestJS，同时包含定时任务和队列消费者）
+  # 后端 API（NestJS）
   api:
     build: ./backend
     ports:
@@ -22,18 +21,29 @@ services:
       - DATABASE_USER=root
       - DATABASE_PASSWORD=${DATABASE_PASSWORD:-password}
       - DATABASE_NAME=newsagent
-      - REDIS_URL=redis://redis:6379
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - LLM_URL=${LLM_URL:-https://api.openai.com/v1}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o}
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - WERSS_API_KEY=${WERSS_API_KEY:-}
+      - WECHAT_TOKEN=${WECHAT_TOKEN:-}
+      - WECHAT_COOKIE=${WECHAT_COOKIE:-}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-465}
       - SMTP_USER=${SMTP_USER:-}
       - SMTP_PASSWORD=${SMTP_PASSWORD:-}
-      - JWT_SECRET=${JWT_SECRET:-dev-secret}
+      - SMTP_FROM=${SMTP_FROM:-}
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
 
   # MySQL
   db:
@@ -47,14 +57,26 @@ services:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
 
-  # Redis（缓存 + Bull Queue）
+  # Redis
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
 
 volumes:
   mysql_data:
