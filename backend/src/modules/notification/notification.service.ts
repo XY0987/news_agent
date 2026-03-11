@@ -47,7 +47,7 @@ export class NotificationService {
     const interactions = await this.interactionRepo.find({
       where: {
         userId,
-        updatedAt: MoreThanOrEqual(today),
+        createdAt: MoreThanOrEqual(today),
       },
     });
 
