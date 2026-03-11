@@ -23,6 +23,11 @@ export default () => ({
     url: process.env.LLM_URL || 'https://api.openai.com/v1',
     apiKey: process.env.LLM_API_KEY || '',
     model: process.env.LLM_MODEL || 'gpt-4o',
+    fallbackModel: process.env.LLM_FALLBACK_MODEL || '',
+  },
+
+  alert: {
+    email: process.env.ALERT_EMAIL || '',
   },
 
   collector: {

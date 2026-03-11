@@ -16,6 +16,12 @@ export const notificationApi = {
       .post("/notifications/send-digest", { userId, contentIds, agentNote })
       .then((r) => r.data);
   },
+
+  sendTodayAnalyzed(userId: string) {
+    return apiClient
+      .post("/notifications/send-today-analyzed", { userId })
+      .then((r) => r.data);
+  },
 };
 
 export const systemApi = {

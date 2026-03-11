@@ -7,6 +7,7 @@ import { ContentEntity } from '../../common/database/entities/content.entity';
 import { UserEntity } from '../../common/database/entities/user.entity';
 import { UserContentInteractionEntity } from '../../common/database/entities/user-content-interaction.entity';
 import { ContentScoreEntity } from '../../common/database/entities/content-score.entity';
+import { EmailChannel } from '../notification/channels/email.channel';
 
 export interface SummaryResult {
   contentId: string;
@@ -30,6 +31,12 @@ export class SummaryService {
   private readonly logger = new Logger(SummaryService.name);
   private openai: OpenAI;
   private model: string;
+  private readonly fallbackModel: string;
+  private readonly alertEmail: string;
+  /** 当前是否处于降级状态 */
+  private usingFallback = false;
+  /** 限频告警邮件冷却（同一小时内不重复发送） */
+  private lastAlertTime = 0;
 
   constructor(
     @InjectRepository(ContentEntity)
@@ -40,12 +47,113 @@ export class SummaryService {
     private readonly interactionRepo: Repository<UserContentInteractionEntity>,
     @InjectRepository(ContentScoreEntity)
     private readonly scoreRepo: Repository<ContentScoreEntity>,
+    private readonly emailChannel: EmailChannel,
     private readonly configService: ConfigService,
   ) {
-    const baseURL = this.configService.get<string>('LLM_URL') || 'https://api.openai.com/v1';
+    const baseURL =
+      this.configService.get<string>('LLM_URL') || 'https://api.openai.com/v1';
     const apiKey = this.configService.get<string>('LLM_API_KEY') || '';
     this.model = this.configService.get<string>('LLM_MODEL') || 'gpt-4o';
+    this.fallbackModel =
+      this.configService.get<string>('LLM_FALLBACK_MODEL') || '';
+    this.alertEmail = this.configService.get<string>('ALERT_EMAIL') || '';
     this.openai = new OpenAI({ baseURL, apiKey });
+  }
+
+  /**
+   * 判断是否为限频错误（429 / 400 业务限频 / rate limit）
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private isRateLimitError(error: any): boolean {
+    if (!error) return false;
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+    const status = error.status || error.statusCode || error?.response?.status;
+    if (status === 429) return true;
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+    const msg: string = String(error.message || error.toString()).toLowerCase();
+    // 标准限频关键词
+    if (
+      msg.includes('rate limit') ||
+      msg.includes('rate_limit') ||
+      msg.includes('too many requests') ||
+      msg.includes('quota exceeded') ||
+      msg.includes('限频')
+    ) {
+      return true;
+    }
+    // 业务层限频：HTTP 400 + 错误码 1620867020 / 消息含"频率超出"或"请求频率"
+    if (status === 400) {
+      if (
+        msg.includes('1620867020') ||
+        msg.includes('频率超出') ||
+        msg.includes('请求频率') ||
+        msg.includes('error_type=2')
+      ) {
+        return true;
+      }
+    }
+    // 兜底：不限状态码，只要消息含业务限频特征也判定
+    return (
+      msg.includes('频率超出限制') ||
+      msg.includes('请求频率超出') ||
+      msg.includes('1620867020')
+    );
+  }
+
+  /**
+   * 限频时发送告警邮件（1小时内不重复发送）
+   */
+  private async sendRateLimitAlert(
+    context: string,
+    errorMsg: string,
+    switchedModel?: string,
+  ): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastAlertTime < 60 * 60 * 1000) return;
+    if (!this.alertEmail || !this.emailChannel.isAvailable()) {
+      this.logger.warn('限频告警：告警邮箱未配置或 SMTP 不可用，跳过告警邮件');
+      return;
+    }
+    this.lastAlertTime = now;
+
+    const time = new Date().toLocaleString('zh-CN', {
+      timeZone: 'Asia/Shanghai',
+    });
+    const subject = `⚠️ News Agent LLM 限频告警`;
+    const html = `
+      <div style="max-width:560px;margin:0 auto;padding:24px;font-family:sans-serif;">
+        <h2 style="color:#dc2626;">⚠️ LLM 接口限频告警</h2>
+        <table style="width:100%;border-collapse:collapse;font-size:14px;">
+          <tr><td style="padding:8px;font-weight:600;color:#374151;">告警时间</td><td style="padding:8px;">${time}</td></tr>
+          <tr><td style="padding:8px;font-weight:600;color:#374151;">触发位置</td><td style="padding:8px;">${context}</td></tr>
+          <tr><td style="padding:8px;font-weight:600;color:#374151;">原始模型</td><td style="padding:8px;">${this.model}</td></tr>
+          <tr><td style="padding:8px;font-weight:600;color:#374151;">错误信息</td><td style="padding:8px;color:#dc2626;">${errorMsg}</td></tr>
+          ${switchedModel ? `<tr><td style="padding:8px;font-weight:600;color:#374151;">已切换到</td><td style="padding:8px;color:#059669;">${switchedModel}</td></tr>` : ''}
+        </table>
+        <p style="margin-top:16px;font-size:13px;color:#6b7280;">此邮件由 News Agent 自动发送，同一小时内不会重复告警。</p>
+      </div>`;
+    const text = `LLM 限频告警 - ${time}\n触发: ${context}\n错误: ${errorMsg}\n${switchedModel ? `已切换模型: ${switchedModel}` : ''}`;
+
+    try {
+      await this.emailChannel.send({
+        to: this.alertEmail,
+        subject,
+        html,
+        text,
+      });
+      this.logger.log(`限频告警邮件已发送至 ${this.alertEmail}`);
+    } catch (e) {
+      this.logger.error(`限频告警邮件发送失败: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * 获取当前应使用的模型名称
+   */
+  private getCurrentModel(): string {
+    return this.usingFallback && this.fallbackModel
+      ? this.fallbackModel
+      : this.model;
   }
 
   /**
@@ -62,15 +170,27 @@ export class SummaryService {
     if (!user) throw new Error(`用户 ${userId} 不存在`);
 
     // 检查是否已有缓存的摘要
-    const existing = await this.interactionRepo.findOneBy({ contentId, userId });
+    const existing = await this.interactionRepo.findOneBy({
+      contentId,
+      userId,
+    });
     if (existing && existing.summary) {
       // 读取已有的 AI 评分
-      const existingScore = await this.scoreRepo.findOneBy({ contentId, userId });
+      const existingScore = await this.scoreRepo.findOneBy({
+        contentId,
+        userId,
+      });
       return {
         contentId,
         summary: existing.summary,
         relevanceScore: existing.score || 0,
-        scoreBreakdown: existingScore?.scoreBreakdown as any || { relevance: 0, quality: 0, timeliness: 0, novelty: 0, actionability: 0 },
+        scoreBreakdown: (existingScore?.scoreBreakdown as any) || {
+          relevance: 0,
+          quality: 0,
+          timeliness: 0,
+          novelty: 0,
+          actionability: 0,
+        },
         keyPoints: [],
         actionSuggestions: (existing.suggestions as any) || [],
         contentType: 'cached',
@@ -82,7 +202,8 @@ export class SummaryService {
       const result = await this.callLLMForSummary(content, user);
 
       // 缓存到 interaction 表
-      const interaction = existing || this.interactionRepo.create({ contentId, userId });
+      const interaction =
+        existing || this.interactionRepo.create({ contentId, userId });
       interaction.summary = result.summary;
       interaction.suggestions = result.actionSuggestions as any;
       interaction.score = result.relevanceScore;
@@ -111,12 +232,20 @@ export class SummaryService {
     totalRequested: number;
     totalSuccess: number;
     totalFailed: number;
-    details: { contentId: string; relevanceScore: number; finalScore: number }[];
+    details: {
+      contentId: string;
+      relevanceScore: number;
+      finalScore: number;
+    }[];
     summary: string;
   }> {
     const successIds: string[] = [];
     const failedIds: string[] = [];
-    const details: { contentId: string; relevanceScore: number; finalScore: number }[] = [];
+    const details: {
+      contentId: string;
+      relevanceScore: number;
+      finalScore: number;
+    }[] = [];
 
     // 控制并发，每次最多 3 个并行
     const batchSize = 3;
@@ -139,11 +268,20 @@ export class SummaryService {
           successIds.push(id);
           // 计算 finalScore（与 updateContentScore 相同的权重）
           const bd = result.scoreBreakdown;
-          const finalScore = Math.round(
-            (bd.relevance * 0.45 + bd.quality * 0.2 + bd.timeliness * 0.2 +
-              bd.novelty * 0.1 + bd.actionability * 0.05) * 100,
-          ) / 100;
-          details.push({ contentId: id, relevanceScore: result.relevanceScore, finalScore });
+          const finalScore =
+            Math.round(
+              (bd.relevance * 0.45 +
+                bd.quality * 0.2 +
+                bd.timeliness * 0.2 +
+                bd.novelty * 0.1 +
+                bd.actionability * 0.05) *
+                100,
+            ) / 100;
+          details.push({
+            contentId: id,
+            relevanceScore: result.relevanceScore,
+            finalScore,
+          });
         } else {
           failedIds.push(id);
         }
@@ -201,14 +339,48 @@ ${textContent}
 直接输出以下格式的 JSON，不要有任何多余文字：
 {"summary":"...","relevance_score":80,"score_breakdown":{"relevance":80,"quality":75,"timeliness":60,"novelty":70,"actionability":65},"key_points":["...","..."],"action_suggestions":[{"type":"learn","suggestion":"..."},{"type":"practice","suggestion":"..."}],"content_type":"new_technology","tags":["AI","LLM"]}`;
 
-    const response = await this.openai.chat.completions.create({
-      model: this.model,
-      max_tokens: 8192,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-    });
+    let response: OpenAI.ChatCompletion;
+    try {
+      response = await this.openai.chat.completions.create({
+        model: this.getCurrentModel(),
+        max_tokens: 8192,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+      });
+    } catch (error) {
+      // 限频检测：切换备用模型重试
+      if (
+        this.isRateLimitError(error) &&
+        this.fallbackModel &&
+        !this.usingFallback
+      ) {
+        this.logger.warn(`LLM 限频，切换到备用模型 ${this.fallbackModel}`);
+        this.usingFallback = true;
+        void this.sendRateLimitAlert(
+          'SummaryService.callLLMForSummary',
+          (error as Error).message,
+          this.fallbackModel,
+        );
+        response = await this.openai.chat.completions.create({
+          model: this.fallbackModel,
+          max_tokens: 8192,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+        });
+      } else {
+        if (this.isRateLimitError(error)) {
+          void this.sendRateLimitAlert(
+            'SummaryService.callLLMForSummary',
+            (error as Error).message,
+          );
+        }
+        throw error;
+      }
+    }
 
     const message = response.choices[0]?.message;
     // 兼容推理模型（如 glm-5）：content 可能为 null，实际内容在 reasoning_content 中
@@ -220,7 +392,13 @@ ${textContent}
     // 尝试多种方式提取 JSON
     const parsed = this.extractJson(text);
 
-    const defaultBreakdown = { relevance: 50, quality: 50, timeliness: 50, novelty: 50, actionability: 50 };
+    const defaultBreakdown = {
+      relevance: 50,
+      quality: 50,
+      timeliness: 50,
+      novelty: 50,
+      actionability: 50,
+    };
     const breakdown = parsed.score_breakdown || defaultBreakdown;
 
     return {
@@ -297,13 +475,15 @@ ${textContent}
       };
 
       const bd = result.scoreBreakdown;
-      const finalScore = Math.round(
-        (bd.relevance * weights.relevance +
-          bd.quality * weights.quality +
-          bd.timeliness * weights.timeliness +
-          bd.novelty * weights.novelty +
-          bd.actionability * weights.actionability) * 100,
-      ) / 100;
+      const finalScore =
+        Math.round(
+          (bd.relevance * weights.relevance +
+            bd.quality * weights.quality +
+            bd.timeliness * weights.timeliness +
+            bd.novelty * weights.novelty +
+            bd.actionability * weights.actionability) *
+            100,
+        ) / 100;
 
       let scoreEntity = await this.scoreRepo.findOneBy({ contentId, userId });
 
@@ -321,7 +501,9 @@ ${textContent}
       }
 
       await this.scoreRepo.save(scoreEntity);
-      this.logger.log(`AI 评分回写: contentId=${contentId}, finalScore=${finalScore}`);
+      this.logger.log(
+        `AI 评分回写: contentId=${contentId}, finalScore=${finalScore}`,
+      );
     } catch (error) {
       this.logger.warn(`AI 评分回写失败: ${(error as Error).message}`);
     }
@@ -339,7 +521,13 @@ ${textContent}
       contentId: content.id,
       summary: `【规则摘要】${content.title}\n${summary}`,
       relevanceScore: 50,
-      scoreBreakdown: { relevance: 50, quality: 50, timeliness: 50, novelty: 50, actionability: 50 },
+      scoreBreakdown: {
+        relevance: 50,
+        quality: 50,
+        timeliness: 50,
+        novelty: 50,
+        actionability: 50,
+      },
       keyPoints: [],
       actionSuggestions: [],
       contentType: 'unknown',

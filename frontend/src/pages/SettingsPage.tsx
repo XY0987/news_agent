@@ -11,6 +11,7 @@ import {
   Save,
   Brain,
   Sparkles,
+  Mail,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,7 +34,7 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { agentApi } from "@/api/agent";
-import { systemApi } from "@/api/notification";
+import { systemApi, notificationApi } from "@/api/notification";
 import { wechatApi } from "@/api/source";
 import { DEFAULT_USER_ID } from "@/utils";
 
@@ -56,6 +57,7 @@ export function SettingsPage() {
   const [showCookie, setShowCookie] = useState(false);
   const [credStatus, setCredStatus] = useState<CredentialStatus | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
+  const [sendingToday, setSendingToday] = useState(false);
   const { toast } = useToast();
 
   const fetchStatus = useCallback(async () => {
@@ -158,6 +160,34 @@ export function SettingsPage() {
       });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSendTodayAnalyzed = async () => {
+    setSendingToday(true);
+    try {
+      const res = await notificationApi.sendTodayAnalyzed(DEFAULT_USER_ID);
+      const data = res.data ?? res;
+      if (data.success) {
+        toast({
+          title: "发送成功",
+          description: `已将 ${data.contentCount} 篇已分析文章发送到邮箱`,
+        });
+      } else {
+        toast({
+          title: "发送失败",
+          description: data.message || "未知错误",
+          variant: "destructive",
+        });
+      }
+    } catch (e: unknown) {
+      toast({
+        title: "发送失败",
+        description: (e as Error).message,
+        variant: "destructive",
+      });
+    } finally {
+      setSendingToday(false);
     }
   };
 
@@ -328,6 +358,38 @@ export function SettingsPage() {
               <p className="text-sm">{analysisResult}</p>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      {/* 发送今日已分析文章 */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Mail className="h-5 w-5" />
+            发送今日已分析文章
+          </CardTitle>
+          <CardDescription>
+            将今天已完成 AI
+            分析（有摘要和评分）的文章汇总发送到你的邮箱，无需重新分析。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-xs text-muted-foreground">
+            仅发送今天已经生成过 AI
+            摘要的文章。如果今天尚未进行 AI 分析，请先使用上方「AI 分析」功能。
+          </p>
+          <Button
+            onClick={handleSendTodayAnalyzed}
+            disabled={sendingToday}
+            className="w-full"
+          >
+            {sendingToday ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Mail className="h-4 w-4 mr-2" />
+            )}
+            {sendingToday ? "发送中..." : "发送到邮箱"}
+          </Button>
         </CardContent>
       </Card>
 

@@ -10,6 +10,7 @@ import { CollectorService } from '../collector/collector.service';
 import { FilterService } from '../filter/filter.service';
 import { ScorerService } from '../scorer/scorer.service';
 import { NotificationService } from '../notification/notification.service';
+import { EmailChannel } from '../notification/channels/email.channel';
 import { UserService } from '../user/user.service';
 import { SourceService } from '../source/source.service';
 import type {
@@ -33,8 +34,14 @@ export class AgentService {
   private readonly logger = new Logger(AgentService.name);
   private readonly openai: OpenAI;
   private readonly model: string;
+  private readonly fallbackModel: string;
+  private readonly alertEmail: string;
   private readonly maxSteps = 25;
   private readonly maxMessageRounds = 20;
+  /** 当前是否处于降级状态（限频切换了备用模型） */
+  private usingFallback = false;
+  /** 限频告警邮件冷却（同一小时内不重复发送） */
+  private lastAlertTime = 0;
 
   constructor(
     @InjectRepository(AgentLogEntity)
@@ -44,15 +51,118 @@ export class AgentService {
     private readonly filterService: FilterService,
     private readonly scorerService: ScorerService,
     private readonly notificationService: NotificationService,
+    private readonly emailChannel: EmailChannel,
     private readonly userService: UserService,
     private readonly sourceService: SourceService,
     private readonly configService: ConfigService,
   ) {
-    const baseURL = this.configService.get<string>('LLM_URL') || 'https://api.openai.com/v1';
+    const baseURL =
+      this.configService.get<string>('LLM_URL') || 'https://api.openai.com/v1';
     const apiKey = this.configService.get<string>('LLM_API_KEY') || '';
     this.model = this.configService.get<string>('LLM_MODEL') || 'gpt-4o';
+    this.fallbackModel =
+      this.configService.get<string>('LLM_FALLBACK_MODEL') || '';
+    this.alertEmail = this.configService.get<string>('ALERT_EMAIL') || '';
     this.openai = new OpenAI({ baseURL, apiKey });
-    this.logger.log(`Agent LLM 初始化: baseURL=${baseURL}, model=${this.model}`);
+    this.logger.log(
+      `Agent LLM 初始化: baseURL=${baseURL}, model=${this.model}, fallback=${this.fallbackModel || '无'}`,
+    );
+  }
+
+  /**
+   * 判断是否为限频错误（429 / 400 业务限频 / rate limit）
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private isRateLimitError(error: any): boolean {
+    if (!error) return false;
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+    const status = error.status || error.statusCode || error?.response?.status;
+    if (status === 429) return true;
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+    const msg: string = String(error.message || error.toString()).toLowerCase();
+    // 标准限频关键词
+    if (
+      msg.includes('rate limit') ||
+      msg.includes('rate_limit') ||
+      msg.includes('too many requests') ||
+      msg.includes('quota exceeded') ||
+      msg.includes('限频')
+    ) {
+      return true;
+    }
+    // 业务层限频：HTTP 400 + 错误码 1620867020 / 消息含"频率超出"或"请求频率"
+    if (status === 400) {
+      if (
+        msg.includes('1620867020') ||
+        msg.includes('频率超出') ||
+        msg.includes('请求频率') ||
+        msg.includes('error_type=2')
+      ) {
+        return true;
+      }
+    }
+    // 兜底：不限状态码，只要消息含业务限频特征也判定
+    return (
+      msg.includes('频率超出限制') ||
+      msg.includes('请求频率超出') ||
+      msg.includes('1620867020')
+    );
+  }
+
+  /**
+   * 限频时发送告警邮件（1小时内不重复发送）
+   */
+  private async sendRateLimitAlert(
+    context: string,
+    errorMsg: string,
+    switchedModel?: string,
+  ): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastAlertTime < 60 * 60 * 1000) return; // 1小时冷却
+    if (!this.alertEmail || !this.emailChannel.isAvailable()) {
+      this.logger.warn('限频告警：告警邮箱未配置或 SMTP 不可用，跳过告警邮件');
+      return;
+    }
+    this.lastAlertTime = now;
+
+    const time = new Date().toLocaleString('zh-CN', {
+      timeZone: 'Asia/Shanghai',
+    });
+    const subject = `⚠️ News Agent LLM 限频告警`;
+    const html = `
+      <div style="max-width:560px;margin:0 auto;padding:24px;font-family:sans-serif;">
+        <h2 style="color:#dc2626;">⚠️ LLM 接口限频告警</h2>
+        <table style="width:100%;border-collapse:collapse;font-size:14px;">
+          <tr><td style="padding:8px;font-weight:600;color:#374151;">告警时间</td><td style="padding:8px;">${time}</td></tr>
+          <tr><td style="padding:8px;font-weight:600;color:#374151;">触发位置</td><td style="padding:8px;">${context}</td></tr>
+          <tr><td style="padding:8px;font-weight:600;color:#374151;">原始模型</td><td style="padding:8px;">${this.model}</td></tr>
+          <tr><td style="padding:8px;font-weight:600;color:#374151;">错误信息</td><td style="padding:8px;color:#dc2626;">${errorMsg}</td></tr>
+          ${switchedModel ? `<tr><td style="padding:8px;font-weight:600;color:#374151;">已切换到</td><td style="padding:8px;color:#059669;">${switchedModel}</td></tr>` : ''}
+        </table>
+        <p style="margin-top:16px;font-size:13px;color:#6b7280;">此邮件由 News Agent 自动发送，同一小时内不会重复告警。</p>
+      </div>`;
+    const text = `LLM 限频告警 - ${time}\n触发: ${context}\n错误: ${errorMsg}\n${switchedModel ? `已切换模型: ${switchedModel}` : ''}`;
+
+    try {
+      await this.emailChannel.send({
+        to: this.alertEmail,
+        subject,
+        html,
+        text,
+      });
+      this.logger.log(`限频告警邮件已发送至 ${this.alertEmail}`);
+    } catch (e) {
+      this.logger.error(`限频告警邮件发送失败: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * 获取当前应使用的模型名称
+   */
+  private getCurrentModel(): string {
+    return this.usingFallback && this.fallbackModel
+      ? this.fallbackModel
+      : this.model;
   }
 
   /**
@@ -61,7 +171,9 @@ export class AgentService {
   async runDailyDigest(userId: string): Promise<AgentResult> {
     const sessionId = uuidv4();
     const startTime = Date.now();
-    this.logger.log(`[${sessionId}] Agent 开始执行每日推送任务, userId=${userId}`);
+    this.logger.log(
+      `[${sessionId}] Agent 开始执行每日推送任务, userId=${userId}`,
+    );
 
     try {
       // 获取用户画像
@@ -98,17 +210,55 @@ export class AgentService {
         let response: OpenAI.ChatCompletion;
         try {
           response = await this.openai.chat.completions.create({
-            model: this.model,
+            model: this.getCurrentModel(),
             max_tokens: 4096,
             messages,
             tools: tools as OpenAI.ChatCompletionTool[],
             tool_choice: 'auto',
           });
         } catch (error) {
-          this.logger.error(
-            `[${sessionId}] LLM 调用失败: ${(error as Error).message}`,
-          );
-          break;
+          // 限频检测：切换备用模型重试
+          if (
+            this.isRateLimitError(error) &&
+            this.fallbackModel &&
+            !this.usingFallback
+          ) {
+            this.logger.warn(
+              `[${sessionId}] LLM 限频，切换到备用模型 ${this.fallbackModel}`,
+            );
+            this.usingFallback = true;
+            // 异步发送告警邮件（不阻塞主流程）
+            void this.sendRateLimitAlert(
+              'AgentService.runDailyDigest',
+              (error as Error).message,
+              this.fallbackModel,
+            );
+            try {
+              response = await this.openai.chat.completions.create({
+                model: this.fallbackModel,
+                max_tokens: 4096,
+                messages,
+                tools: tools as OpenAI.ChatCompletionTool[],
+                tool_choice: 'auto',
+              });
+            } catch (retryError) {
+              this.logger.error(
+                `[${sessionId}] 备用模型也失败: ${(retryError as Error).message}`,
+              );
+              break;
+            }
+          } else {
+            if (this.isRateLimitError(error)) {
+              void this.sendRateLimitAlert(
+                'AgentService.runDailyDigest',
+                (error as Error).message,
+              );
+            }
+            this.logger.error(
+              `[${sessionId}] LLM 调用失败: ${(error as Error).message}`,
+            );
+            break;
+          }
         }
 
         const choice = response.choices[0];
@@ -122,7 +272,13 @@ export class AgentService {
         const toolCallsRaw = assistantMessage.tool_calls || [];
 
         const toolCalls: AgentToolCall[] = toolCallsRaw
-          .filter((tc): tc is OpenAI.ChatCompletionMessageToolCall & { type: 'function' } => tc.type === 'function')
+          .filter(
+            (
+              tc,
+            ): tc is OpenAI.ChatCompletionMessageToolCall & {
+              type: 'function';
+            } => tc.type === 'function',
+          )
           .map((tc) => ({
             id: tc.id,
             name: tc.function.name,
@@ -360,9 +516,7 @@ export class AgentService {
       });
 
       // 4. 取 Top 5
-      const topIds = scoreResult.scores
-        .slice(0, 5)
-        .map((s) => s.contentId);
+      const topIds = scoreResult.scores.slice(0, 5).map((s) => s.contentId);
 
       if (topIds.length === 0) {
         return {
@@ -568,7 +722,13 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
 
       if (result && typeof result === 'object') {
         // 优先保留 ID 列表字段（这些是 Agent 后续决策的关键数据）
-        const idFields = ['successIds', 'failedIds', 'contentIds', 'passedIds', 'filteredIds'];
+        const idFields = [
+          'successIds',
+          'failedIds',
+          'contentIds',
+          'passedIds',
+          'filteredIds',
+        ];
         const summarized: Record<string, any> = { _truncated: true };
 
         // 第一轮：保留所有 ID 列表和数值/布尔字段
@@ -579,7 +739,8 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
           } else if (typeof value === 'number' || typeof value === 'boolean') {
             summarized[key] = value;
           } else if (typeof value === 'string') {
-            summarized[key] = value.length > 300 ? value.slice(0, 300) + '...' : value;
+            summarized[key] =
+              value.length > 300 ? value.slice(0, 300) + '...' : value;
           }
         }
 
@@ -590,10 +751,14 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
             if (key in summarized || idFields.includes(key)) continue;
             if (Array.isArray(value)) {
               // 非 ID 数组只保留前 5 项 + 总数
-              summarized[key] = { count: value.length, first5: value.slice(0, 5) };
+              summarized[key] = {
+                count: value.length,
+                first5: value.slice(0, 5),
+              };
             } else if (value && typeof value === 'object') {
               const valStr = JSON.stringify(value);
-              summarized[key] = valStr.length > 300 ? valStr.slice(0, 300) + '...' : value;
+              summarized[key] =
+                valStr.length > 300 ? valStr.slice(0, 300) + '...' : value;
             }
             // 检查是否接近上限
             const newStr = JSON.stringify(summarized);
@@ -602,7 +767,9 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
         }
 
         const str = JSON.stringify(summarized);
-        return str.length > maxLen ? str.slice(0, maxLen - 20) + '...(截断)' : str;
+        return str.length > maxLen
+          ? str.slice(0, maxLen - 20) + '...(截断)'
+          : str;
       }
     } catch {
       // fallback
@@ -624,7 +791,9 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
     const startTime = Date.now();
     const daysWindow = options?.daysWindow ?? 1;
 
-    this.logger.log(`[${sessionId}] Agent 分析模式启动, userId=${userId}, daysWindow=${daysWindow}`);
+    this.logger.log(
+      `[${sessionId}] Agent 分析模式启动, userId=${userId}, daysWindow=${daysWindow}`,
+    );
 
     try {
       const user = await this.userService.findById(userId);
@@ -660,15 +829,54 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
         let response: OpenAI.ChatCompletion;
         try {
           response = await this.openai.chat.completions.create({
-            model: this.model,
+            model: this.getCurrentModel(),
             max_tokens: 4096,
             messages,
             tools: tools as OpenAI.ChatCompletionTool[],
             tool_choice: 'auto',
           });
         } catch (error) {
-          this.logger.error(`[${sessionId}] LLM 调用失败: ${(error as Error).message}`);
-          break;
+          // 限频检测：切换备用模型重试
+          if (
+            this.isRateLimitError(error) &&
+            this.fallbackModel &&
+            !this.usingFallback
+          ) {
+            this.logger.warn(
+              `[${sessionId}] LLM 限频，切换到备用模型 ${this.fallbackModel}`,
+            );
+            this.usingFallback = true;
+            void this.sendRateLimitAlert(
+              'AgentService.runAnalysisOnly',
+              (error as Error).message,
+              this.fallbackModel,
+            );
+            try {
+              response = await this.openai.chat.completions.create({
+                model: this.fallbackModel,
+                max_tokens: 4096,
+                messages,
+                tools: tools as OpenAI.ChatCompletionTool[],
+                tool_choice: 'auto',
+              });
+            } catch (retryError) {
+              this.logger.error(
+                `[${sessionId}] 备用模型也失败: ${(retryError as Error).message}`,
+              );
+              break;
+            }
+          } else {
+            if (this.isRateLimitError(error)) {
+              void this.sendRateLimitAlert(
+                'AgentService.runAnalysisOnly',
+                (error as Error).message,
+              );
+            }
+            this.logger.error(
+              `[${sessionId}] LLM 调用失败: ${(error as Error).message}`,
+            );
+            break;
+          }
         }
 
         const choice = response.choices[0];
@@ -682,7 +890,13 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
         const toolCallsRaw = assistantMessage.tool_calls || [];
 
         const toolCalls: AgentToolCall[] = toolCallsRaw
-          .filter((tc): tc is OpenAI.ChatCompletionMessageToolCall & { type: 'function' } => tc.type === 'function')
+          .filter(
+            (
+              tc,
+            ): tc is OpenAI.ChatCompletionMessageToolCall & {
+              type: 'function';
+            } => tc.type === 'function',
+          )
           .map((tc) => ({
             id: tc.id,
             name: tc.function.name,
@@ -706,7 +920,9 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
           const totalDuration = Date.now() - startTime;
           await this.logAgentExecution(userId, sessionId, steps);
 
-          this.logger.log(`[${sessionId}] Agent 分析完成: ${steps.length} 步, ${totalDuration}ms`);
+          this.logger.log(
+            `[${sessionId}] Agent 分析完成: ${steps.length} 步, ${totalDuration}ms`,
+          );
 
           return {
             sessionId,
@@ -730,7 +946,10 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
             toolCalls.map(async (tc) => {
               const toolStart = Date.now();
               try {
-                const result = await this.toolRegistry.executeTool(tc.name, tc.args);
+                const result = await this.toolRegistry.executeTool(
+                  tc.name,
+                  tc.args,
+                );
 
                 if (tc.name === 'send_daily_digest' && result?.success) {
                   digestSent = true;
@@ -758,7 +977,9 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
                 };
               } catch (error) {
                 const errorMsg = `Tool 执行失败: ${(error as Error).message}`;
-                this.logger.error(`[${sessionId}] ${tc.name} 执行失败: ${(error as Error).message}`);
+                this.logger.error(
+                  `[${sessionId}] ${tc.name} 执行失败: ${(error as Error).message}`,
+                );
 
                 toolResults.push({
                   toolUseId: tc.id,
@@ -793,11 +1014,15 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
       const totalDuration = Date.now() - startTime;
       await this.logAgentExecution(userId, sessionId, steps);
 
-      this.logger.warn(`[${sessionId}] Agent 分析模式达到最大步数限制 (${this.maxSteps})`);
+      this.logger.warn(
+        `[${sessionId}] Agent 分析模式达到最大步数限制 (${this.maxSteps})`,
+      );
 
       // 如果步数耗尽但未发送推送，触发兜底
       if (!digestSent) {
-        this.logger.warn(`[${sessionId}] Agent 分析模式未完成推送，触发兜底安全网`);
+        this.logger.warn(
+          `[${sessionId}] Agent 分析模式未完成推送，触发兜底安全网`,
+        );
         const fallbackResult = await this.runFallback(userId, sessionId);
         return {
           sessionId,
@@ -822,7 +1047,9 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
         contentCount,
       };
     } catch (error) {
-      this.logger.error(`[${sessionId}] Agent 分析异常: ${(error as Error).message}`);
+      this.logger.error(
+        `[${sessionId}] Agent 分析异常: ${(error as Error).message}`,
+      );
       return {
         sessionId,
         report: `Agent 分析失败: ${(error as Error).message}`,
@@ -840,7 +1067,9 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
    * Token 管理：当消息列表过长时，裁剪早期消息
    * 保留 system prompt + 第一条 user 消息 + 最近 N 轮对话
    */
-  private pruneMessagesIfNeeded(messages: OpenAI.ChatCompletionMessageParam[]): void {
+  private pruneMessagesIfNeeded(
+    messages: OpenAI.ChatCompletionMessageParam[],
+  ): void {
     const maxRounds = this.maxMessageRounds;
     if (messages.length > maxRounds * 2) {
       // 保留前两条（system + 初始 user 消息）+ 最近 N 轮
@@ -896,9 +1125,7 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
         `Agent 日志已记录: sessionId=${sessionId}, ${steps.length} 步`,
       );
     } catch (error) {
-      this.logger.error(
-        `记录 Agent 日志失败: ${(error as Error).message}`,
-      );
+      this.logger.error(`记录 Agent 日志失败: ${(error as Error).message}`);
     }
   }
 
@@ -947,7 +1174,10 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
       .select('log.session_id', 'sessionId')
       .addSelect('MIN(log.created_at)', 'startTime')
       .addSelect('COUNT(*)', 'stepCount')
-      .addSelect("GROUP_CONCAT(log.action ORDER BY log.created_at SEPARATOR ',')", 'actions')
+      .addSelect(
+        "GROUP_CONCAT(log.action ORDER BY log.created_at SEPARATOR ',')",
+        'actions',
+      )
       .where('log.user_id = :userId', { userId })
       .groupBy('log.session_id')
       .orderBy('MIN(log.created_at)', 'DESC')

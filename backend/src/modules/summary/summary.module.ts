@@ -5,6 +5,7 @@ import { ContentEntity } from '../../common/database/entities/content.entity';
 import { UserEntity } from '../../common/database/entities/user.entity';
 import { UserContentInteractionEntity } from '../../common/database/entities/user-content-interaction.entity';
 import { ContentScoreEntity } from '../../common/database/entities/content-score.entity';
+import { NotificationModule } from '../notification/notification.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { ContentScoreEntity } from '../../common/database/entities/content-score
       UserContentInteractionEntity,
       ContentScoreEntity,
     ]),
+    NotificationModule,
   ],
   providers: [SummaryService],
   exports: [SummaryService],

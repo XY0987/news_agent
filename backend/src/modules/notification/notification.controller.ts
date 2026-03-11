@@ -62,4 +62,15 @@ export class NotificationController {
     const result = await this.notificationService.sendDigest(body);
     return ApiResponse.ok(result);
   }
+
+  /**
+   * 发送今日已分析的文章到邮箱
+   */
+  @Post('send-today-analyzed')
+  async sendTodayAnalyzed(@Body() body: { userId: string }) {
+    const result = await this.notificationService.sendTodayAnalyzed(
+      body.userId,
+    );
+    return ApiResponse.ok(result);
+  }
 }

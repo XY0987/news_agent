@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, MoreThanOrEqual } from 'typeorm';
 import { ContentEntity } from '../../common/database/entities/content.entity';
 import { ContentScoreEntity } from '../../common/database/entities/content-score.entity';
 import { UserEntity } from '../../common/database/entities/user.entity';
@@ -25,6 +25,61 @@ export class NotificationService {
     private readonly interactionRepo: Repository<UserContentInteractionEntity>,
     private readonly emailChannel: EmailChannel,
   ) {}
+
+  /**
+   * 发送今日已分析的文章到邮箱
+   * 自动查找今天有 AI 摘要+评分的文章，按评分排序后发送
+   */
+  async sendTodayAnalyzed(userId: string): Promise<{
+    success: boolean;
+    message: string;
+    contentCount: number;
+    digestId?: string;
+  }> {
+    const user = await this.userRepo.findOneBy({ id: userId });
+    if (!user) throw new Error(`用户 ${userId} 不存在`);
+
+    // 今日零点
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // 查找今日有 AI 摘要的交互记录
+    const interactions = await this.interactionRepo.find({
+      where: {
+        userId,
+        updatedAt: MoreThanOrEqual(today),
+      },
+    });
+
+    // 过滤出有 summary 的（即已分析过的）
+    const analyzedInteractions = interactions.filter(
+      (i) => i.summary && i.summary.trim().length > 0,
+    );
+
+    if (analyzedInteractions.length === 0) {
+      return {
+        success: false,
+        message: '今日暂无已分析的文章',
+        contentCount: 0,
+      };
+    }
+
+    const contentIds = analyzedInteractions.map((i) => i.contentId);
+
+    // 复用现有的 sendDigest 逻辑
+    const result = await this.sendDigest({
+      userId,
+      contentIds,
+      agentNote: '手动发送 — 今日已分析文章汇总',
+    });
+
+    return {
+      success: result.success,
+      message: result.message,
+      contentCount: contentIds.length,
+      digestId: result.digestId,
+    };
+  }
 
   /**
    * 发送每日精选 - Agent Tool 入口
