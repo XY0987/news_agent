@@ -4,12 +4,73 @@ set -e
 NETWORK_NAME="news_agent_net"
 MYSQL_CONTAINER="mysql-container"
 REDIS_CONTAINER="redis-container"
+ENV_FILE="$(cd "$(dirname "$0")" && pwd)/backend/.env"
 
 # 颜色
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
+
+# 将 .env 中的 HOST 替换为 Docker 容器名（Docker 内部通过容器名互访）
+patch_env_for_docker() {
+  if [ ! -f "$ENV_FILE" ]; then
+    echo -e "  ${YELLOW}.env 文件不存在: $ENV_FILE${NC}"
+    return
+  fi
+
+  echo -e "${GREEN}=== 配置 .env 用于 Docker 内部网络 ===${NC}"
+
+  # 备份原始值（仅在还没备份时才备份）
+  if [ ! -f "${ENV_FILE}.hostbak" ]; then
+    grep -E '^DATABASE_HOST=' "$ENV_FILE" | head -1 > "${ENV_FILE}.hostbak"
+    grep -E '^REDIS_HOST=' "$ENV_FILE" | head -1 >> "${ENV_FILE}.hostbak"
+    echo "  已备份原始 HOST 配置到 ${ENV_FILE}.hostbak"
+  fi
+
+  # 用 sed 替换 DATABASE_HOST 和 REDIS_HOST 为容器名
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS sed 需要 -i ''
+    sed -i '' "s/^DATABASE_HOST=.*/DATABASE_HOST=${MYSQL_CONTAINER}/" "$ENV_FILE"
+    sed -i '' "s/^REDIS_HOST=.*/REDIS_HOST=${REDIS_CONTAINER}/" "$ENV_FILE"
+  else
+    sed -i "s/^DATABASE_HOST=.*/DATABASE_HOST=${MYSQL_CONTAINER}/" "$ENV_FILE"
+    sed -i "s/^REDIS_HOST=.*/REDIS_HOST=${REDIS_CONTAINER}/" "$ENV_FILE"
+  fi
+
+  echo "  DATABASE_HOST -> ${MYSQL_CONTAINER}"
+  echo "  REDIS_HOST    -> ${REDIS_CONTAINER}"
+}
+
+# 从备份恢复原始 HOST 配置
+restore_env() {
+  if [ -f "${ENV_FILE}.hostbak" ]; then
+    echo -e "${GREEN}=== 恢复 .env 原始 HOST 配置 ===${NC}"
+    local orig_db_host orig_redis_host
+    orig_db_host=$(grep '^DATABASE_HOST=' "${ENV_FILE}.hostbak" | head -1)
+    orig_redis_host=$(grep '^REDIS_HOST=' "${ENV_FILE}.hostbak" | head -1)
+
+    if [ -n "$orig_db_host" ]; then
+      if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed -i '' "s/^DATABASE_HOST=.*/${orig_db_host}/" "$ENV_FILE"
+      else
+        sed -i "s/^DATABASE_HOST=.*/${orig_db_host}/" "$ENV_FILE"
+      fi
+      echo "  已恢复 $orig_db_host"
+    fi
+
+    if [ -n "$orig_redis_host" ]; then
+      if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed -i '' "s/^REDIS_HOST=.*/${orig_redis_host}/" "$ENV_FILE"
+      else
+        sed -i "s/^REDIS_HOST=.*/${orig_redis_host}/" "$ENV_FILE"
+      fi
+      echo "  已恢复 $orig_redis_host"
+    fi
+
+    rm -f "${ENV_FILE}.hostbak"
+  fi
+}
 
 usage() {
   echo "用法: $0 [命令] [服务]"
@@ -93,16 +154,15 @@ do_start() {
   local services=$(resolve_services "$1")
   ensure_infra
 
-  echo -e "${GREEN}=== 启动服务: $services ===${NC}"
-  docker-compose up -d --build $services
+  # 将 .env 中的 HOST 替换为容器名，以便 Docker 内部互访
+  patch_env_for_docker
 
+  # 先创建网络（如果不存在），再将外部容器加入网络
+  docker network create $NETWORK_NAME 2>/dev/null || true
   ensure_network
 
-  # 如果启动了 api，重启以确保网络连接生效
-  if echo "$services" | grep -q "api"; then
-    echo -e "${GREEN}=== 重启 api 确保连接生效 ===${NC}"
-    docker-compose restart api
-  fi
+  echo -e "${GREEN}=== 启动服务: $services ===${NC}"
+  docker-compose up -d --build $services
 
   echo -e "${GREEN}=== 启动完成 ===${NC}"
   docker-compose ps
@@ -118,11 +178,16 @@ do_restart() {
   echo -e "${YELLOW}--- 停止旧服务 ---${NC}"
   docker-compose stop $services
 
+  # 将 .env 中的 HOST 替换为容器名，以便 Docker 内部互访
+  patch_env_for_docker
+
+  # 确保网络和外部容器就绪
+  docker network create $NETWORK_NAME 2>/dev/null || true
+  ensure_network
+
   # 重新构建并启动
   echo -e "${YELLOW}--- 重新构建并启动 ---${NC}"
   docker-compose up -d --build $services
-
-  ensure_network
 
   echo -e "${GREEN}=== 重启完成 ===${NC}"
   docker-compose ps
@@ -132,6 +197,8 @@ do_stop() {
   local services=$(resolve_services "$1")
   echo -e "${YELLOW}=== 停止服务: $services ===${NC}"
   docker-compose stop $services
+  # 恢复 .env 中的原始 HOST 配置
+  restore_env
   echo -e "${GREEN}=== 已停止 ===${NC}"
   docker-compose ps
 }
