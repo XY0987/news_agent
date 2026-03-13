@@ -12,7 +12,7 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-# 将 .env 中的 HOST 替换为 Docker 容器名（Docker 内部通过容器名互访）
+# 将 .env 中的 HOST/PORT 替换为 Docker 容器内部值（Docker 内部通过容器名+内部端口互访）
 patch_env_for_docker() {
   if [ ! -f "$ENV_FILE" ]; then
     echo -e "  ${YELLOW}.env 文件不存在: $ENV_FILE${NC}"
@@ -25,47 +25,43 @@ patch_env_for_docker() {
   if [ ! -f "${ENV_FILE}.hostbak" ]; then
     grep -E '^DATABASE_HOST=' "$ENV_FILE" | head -1 > "${ENV_FILE}.hostbak"
     grep -E '^REDIS_HOST=' "$ENV_FILE" | head -1 >> "${ENV_FILE}.hostbak"
-    echo "  已备份原始 HOST 配置到 ${ENV_FILE}.hostbak"
+    grep -E '^REDIS_PORT=' "$ENV_FILE" | head -1 >> "${ENV_FILE}.hostbak"
+    echo "  已备份原始配置到 ${ENV_FILE}.hostbak"
   fi
 
-  # 用 sed 替换 DATABASE_HOST 和 REDIS_HOST 为容器名
+  # 用 sed 替换为 Docker 内部值
   if [[ "$OSTYPE" == "darwin"* ]]; then
-    # macOS sed 需要 -i ''
     sed -i '' "s/^DATABASE_HOST=.*/DATABASE_HOST=${MYSQL_CONTAINER}/" "$ENV_FILE"
     sed -i '' "s/^REDIS_HOST=.*/REDIS_HOST=${REDIS_CONTAINER}/" "$ENV_FILE"
+    sed -i '' "s/^REDIS_PORT=.*/REDIS_PORT=6379/" "$ENV_FILE"
   else
     sed -i "s/^DATABASE_HOST=.*/DATABASE_HOST=${MYSQL_CONTAINER}/" "$ENV_FILE"
     sed -i "s/^REDIS_HOST=.*/REDIS_HOST=${REDIS_CONTAINER}/" "$ENV_FILE"
+    sed -i "s/^REDIS_PORT=.*/REDIS_PORT=6379/" "$ENV_FILE"
   fi
 
   echo "  DATABASE_HOST -> ${MYSQL_CONTAINER}"
   echo "  REDIS_HOST    -> ${REDIS_CONTAINER}"
+  echo "  REDIS_PORT    -> 6379"
 }
 
-# 从备份恢复原始 HOST 配置
+# 从备份恢复原始配置
 restore_env() {
   if [ -f "${ENV_FILE}.hostbak" ]; then
-    echo -e "${GREEN}=== 恢复 .env 原始 HOST 配置 ===${NC}"
-    local orig_db_host orig_redis_host
+    echo -e "${GREEN}=== 恢复 .env 原始配置 ===${NC}"
+    local orig_db_host orig_redis_host orig_redis_port
     orig_db_host=$(grep '^DATABASE_HOST=' "${ENV_FILE}.hostbak" | head -1)
     orig_redis_host=$(grep '^REDIS_HOST=' "${ENV_FILE}.hostbak" | head -1)
+    orig_redis_port=$(grep '^REDIS_PORT=' "${ENV_FILE}.hostbak" | head -1)
 
-    if [ -n "$orig_db_host" ]; then
-      if [[ "$OSTYPE" == "darwin"* ]]; then
-        sed -i '' "s/^DATABASE_HOST=.*/${orig_db_host}/" "$ENV_FILE"
-      else
-        sed -i "s/^DATABASE_HOST=.*/${orig_db_host}/" "$ENV_FILE"
-      fi
-      echo "  已恢复 $orig_db_host"
-    fi
-
-    if [ -n "$orig_redis_host" ]; then
-      if [[ "$OSTYPE" == "darwin"* ]]; then
-        sed -i '' "s/^REDIS_HOST=.*/${orig_redis_host}/" "$ENV_FILE"
-      else
-        sed -i "s/^REDIS_HOST=.*/${orig_redis_host}/" "$ENV_FILE"
-      fi
-      echo "  已恢复 $orig_redis_host"
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+      [ -n "$orig_db_host" ] && sed -i '' "s/^DATABASE_HOST=.*/${orig_db_host}/" "$ENV_FILE" && echo "  已恢复 $orig_db_host"
+      [ -n "$orig_redis_host" ] && sed -i '' "s/^REDIS_HOST=.*/${orig_redis_host}/" "$ENV_FILE" && echo "  已恢复 $orig_redis_host"
+      [ -n "$orig_redis_port" ] && sed -i '' "s/^REDIS_PORT=.*/${orig_redis_port}/" "$ENV_FILE" && echo "  已恢复 $orig_redis_port"
+    else
+      [ -n "$orig_db_host" ] && sed -i "s/^DATABASE_HOST=.*/${orig_db_host}/" "$ENV_FILE" && echo "  已恢复 $orig_db_host"
+      [ -n "$orig_redis_host" ] && sed -i "s/^REDIS_HOST=.*/${orig_redis_host}/" "$ENV_FILE" && echo "  已恢复 $orig_redis_host"
+      [ -n "$orig_redis_port" ] && sed -i "s/^REDIS_PORT=.*/${orig_redis_port}/" "$ENV_FILE" && echo "  已恢复 $orig_redis_port"
     fi
 
     rm -f "${ENV_FILE}.hostbak"
