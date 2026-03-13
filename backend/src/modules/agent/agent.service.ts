@@ -6,10 +6,6 @@ import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid';
 import { AgentToolRegistry } from './agent-tool-registry';
 import { AgentLogEntity } from '../../common/database/entities/agent-log.entity';
-import { CollectorService } from '../collector/collector.service';
-import { FilterService } from '../filter/filter.service';
-import { ScorerService } from '../scorer/scorer.service';
-import { NotificationService } from '../notification/notification.service';
 import { EmailChannel } from '../notification/channels/email.channel';
 import { UserService } from '../user/user.service';
 import { SourceService } from '../source/source.service';
@@ -47,10 +43,6 @@ export class AgentService {
     @InjectRepository(AgentLogEntity)
     private readonly agentLogRepo: Repository<AgentLogEntity>,
     private readonly toolRegistry: AgentToolRegistry,
-    private readonly collectorService: CollectorService,
-    private readonly filterService: FilterService,
-    private readonly scorerService: ScorerService,
-    private readonly notificationService: NotificationService,
     private readonly emailChannel: EmailChannel,
     private readonly userService: UserService,
     private readonly sourceService: SourceService,
@@ -166,6 +158,101 @@ export class AgentService {
   }
 
   /**
+   * 带重试的 LLM 调用（统一限频处理）
+   *
+   * 重试策略：
+   *  1. 首次调用当前模型
+   *  2. 如果限频 → 等待 30s 后用同一模型重试
+   *  3. 再次限频 → 切换到备用模型
+   *  4. 备用模型也限频 → 等待 60s 后最后重试
+   *  5. 全部失败 → 抛出错误
+   *
+   * 非限频错误直接抛出，不重试
+   */
+  private async callLLMWithRetry(
+    sessionId: string,
+    messages: OpenAI.ChatCompletionMessageParam[],
+    tools: OpenAI.ChatCompletionTool[],
+  ): Promise<OpenAI.ChatCompletion> {
+    const callLLM = (model: string) =>
+      this.openai.chat.completions.create({
+        model,
+        max_tokens: 4096,
+        messages,
+        tools,
+        tool_choice: 'auto',
+      });
+
+    const sleep = (ms: number) =>
+      new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+    // 第 1 次：当前模型
+    try {
+      return await callLLM(this.getCurrentModel());
+    } catch (error) {
+      if (!this.isRateLimitError(error)) throw error;
+
+      this.logger.warn(
+        `[${sessionId}] LLM 限频（第 1 次），等待 30s 后重试...`,
+      );
+
+      // 第 2 次：等待 30s，同一模型重试
+      await sleep(30_000);
+      try {
+        return await callLLM(this.getCurrentModel());
+      } catch (retryError) {
+        if (!this.isRateLimitError(retryError)) throw retryError;
+
+        // 如果有备用模型且还没切换过
+        if (this.fallbackModel && !this.usingFallback) {
+          this.logger.warn(
+            `[${sessionId}] LLM 限频（第 2 次），切换到备用模型 ${this.fallbackModel}`,
+          );
+          this.usingFallback = true;
+          void this.sendRateLimitAlert(
+            'AgentService.callLLMWithRetry',
+            (retryError as Error).message,
+            this.fallbackModel,
+          );
+
+          // 第 3 次：备用模型
+          try {
+            return await callLLM(this.fallbackModel);
+          } catch (fallbackError) {
+            if (!this.isRateLimitError(fallbackError)) throw fallbackError;
+
+            // 第 4 次：等待 60s，备用模型最后一次重试
+            this.logger.warn(
+              `[${sessionId}] 备用模型也限频，等待 60s 后最后重试...`,
+            );
+            await sleep(60_000);
+            try {
+              return await callLLM(this.fallbackModel);
+            } catch (finalError) {
+              void this.sendRateLimitAlert(
+                'AgentService.callLLMWithRetry（全部失败）',
+                (finalError as Error).message,
+              );
+              throw finalError;
+            }
+          }
+        } else {
+          // 没有备用模型，等待 60s 后最后重试
+          this.logger.warn(
+            `[${sessionId}] LLM 限频（第 2 次），无备用模型，等待 60s 后最后重试...`,
+          );
+          void this.sendRateLimitAlert(
+            'AgentService.callLLMWithRetry',
+            (retryError as Error).message,
+          );
+          await sleep(60_000);
+          return await callLLM(this.getCurrentModel());
+        }
+      }
+    }
+  }
+
+  /**
    * 执行每日推送任务 - Agent 核心入口
    */
   async runDailyDigest(userId: string): Promise<AgentResult> {
@@ -209,56 +296,16 @@ export class AgentService {
 
         let response: OpenAI.ChatCompletion;
         try {
-          response = await this.openai.chat.completions.create({
-            model: this.getCurrentModel(),
-            max_tokens: 4096,
+          response = await this.callLLMWithRetry(
+            sessionId,
             messages,
-            tools: tools as OpenAI.ChatCompletionTool[],
-            tool_choice: 'auto',
-          });
+            tools as OpenAI.ChatCompletionTool[],
+          );
         } catch (error) {
-          // 限频检测：切换备用模型重试
-          if (
-            this.isRateLimitError(error) &&
-            this.fallbackModel &&
-            !this.usingFallback
-          ) {
-            this.logger.warn(
-              `[${sessionId}] LLM 限频，切换到备用模型 ${this.fallbackModel}`,
-            );
-            this.usingFallback = true;
-            // 异步发送告警邮件（不阻塞主流程）
-            void this.sendRateLimitAlert(
-              'AgentService.runDailyDigest',
-              (error as Error).message,
-              this.fallbackModel,
-            );
-            try {
-              response = await this.openai.chat.completions.create({
-                model: this.fallbackModel,
-                max_tokens: 4096,
-                messages,
-                tools: tools as OpenAI.ChatCompletionTool[],
-                tool_choice: 'auto',
-              });
-            } catch (retryError) {
-              this.logger.error(
-                `[${sessionId}] 备用模型也失败: ${(retryError as Error).message}`,
-              );
-              break;
-            }
-          } else {
-            if (this.isRateLimitError(error)) {
-              void this.sendRateLimitAlert(
-                'AgentService.runDailyDigest',
-                (error as Error).message,
-              );
-            }
-            this.logger.error(
-              `[${sessionId}] LLM 调用失败: ${(error as Error).message}`,
-            );
-            break;
-          }
+          this.logger.error(
+            `[${sessionId}] LLM 调用最终失败: ${(error as Error).message}`,
+          );
+          break;
         }
 
         const choice = response.choices[0];
@@ -476,92 +523,84 @@ export class AgentService {
   }
 
   /**
-   * 兜底安全网 - Agent 失败时的最小保底流程
-   * 采集全部源 → 规则过滤 → 按时效性排序 → 推送 Top 5
+   * 兜底安全网 - Agent 失败时发送告警邮件通知用户
+   *
+   * 不再发送低质量的无摘要推送，改为发告警邮件让用户感知到异常
    */
   private async runFallback(
     userId: string,
     sessionId: string,
   ): Promise<{ success: boolean; message: string; contentCount: number }> {
-    this.logger.log(`[${sessionId}] 执行兜底安全网`);
+    this.logger.log(`[${sessionId}] 执行兜底安全网（发送告警邮件）`);
 
     try {
-      // 1. 采集
-      const collectResults = await this.collectorService.collectByUser(userId);
-      const totalCollected = collectResults.reduce(
-        (sum, r) => sum + r.totalCollected,
-        0,
-      );
-      this.logger.log(`[${sessionId}] 兜底采集: ${totalCollected} 条`);
+      // 发送告警邮件
+      if (this.alertEmail && this.emailChannel.isAvailable()) {
+        const time = new Date().toLocaleString('zh-CN', {
+          timeZone: 'Asia/Shanghai',
+        });
+        const subject = `🚨 News Agent 推送失败告警`;
+        const html = `
+          <div style="max-width:560px;margin:0 auto;padding:24px;font-family:sans-serif;">
+            <h2 style="color:#dc2626;">🚨 Agent 推送失败</h2>
+            <table style="width:100%;border-collapse:collapse;font-size:14px;">
+              <tr><td style="padding:8px;font-weight:600;color:#374151;">告警时间</td><td style="padding:8px;">${time}</td></tr>
+              <tr><td style="padding:8px;font-weight:600;color:#374151;">Session ID</td><td style="padding:8px;font-family:monospace;font-size:12px;">${sessionId}</td></tr>
+              <tr><td style="padding:8px;font-weight:600;color:#374151;">用户 ID</td><td style="padding:8px;">${userId}</td></tr>
+              <tr><td style="padding:8px;font-weight:600;color:#374151;">失败原因</td><td style="padding:8px;color:#dc2626;">Agent 未能在规定步数内完成推送任务（可能是 LLM 限频、决策异常或 Tool 执行失败）</td></tr>
+            </table>
+            <p style="margin-top:16px;font-size:13px;color:#6b7280;">
+              请查看日志排查原因。可通过手动触发 Agent 重新执行推送。
+            </p>
+          </div>`;
+        const text = `News Agent 推送失败告警\n时间: ${time}\nSession: ${sessionId}\n用户: ${userId}\n\nAgent 未能完成推送任务，请查看日志排查。`;
 
-      // 2. 过滤
-      const filterResult = await this.filterService.filterAndDedup({
-        userId,
-        minLength: 100,
-        daysWindow: 7,
-      });
-
-      if (filterResult.passedIds.length === 0) {
-        return {
-          success: false,
-          message: '兜底执行: 过滤后无可用内容',
-          contentCount: 0,
-        };
+        try {
+          await this.emailChannel.send({
+            to: this.alertEmail,
+            subject,
+            html,
+            text,
+          });
+          this.logger.log(
+            `[${sessionId}] 兜底告警邮件已发送至 ${this.alertEmail}`,
+          );
+        } catch (e) {
+          this.logger.error(
+            `[${sessionId}] 兜底告警邮件发送失败: ${(e as Error).message}`,
+          );
+        }
+      } else {
+        this.logger.warn(
+          `[${sessionId}] 兜底：告警邮箱未配置或 SMTP 不可用，跳过告警邮件`,
+        );
       }
 
-      // 3. 评分
-      const scoreResult = await this.scorerService.scoreAll({
-        contentIds: filterResult.passedIds.slice(0, 50),
-        userId,
-      });
-
-      // 4. 取 Top 5
-      const topIds = scoreResult.scores.slice(0, 5).map((s) => s.contentId);
-
-      if (topIds.length === 0) {
-        return {
-          success: false,
-          message: '兜底执行: 评分后无内容可推送',
-          contentCount: 0,
-        };
-      }
-
-      // 5. 推送
-      const pushResult = await this.notificationService.sendDigest({
-        userId,
-        contentIds: topIds,
-        agentNote: '（兜底推送）Agent 异常，本次为规则推送',
-      });
-
-      // 6. 记录兜底日志
+      // 记录兜底日志
       await this.agentLogRepo.save(
         this.agentLogRepo.create({
           userId,
           sessionId,
-          action: 'fallback_executed',
+          action: 'fallback_alert_sent',
           input: { reason: 'agent_failed_or_no_digest' },
-          output: {
-            collected: totalCollected,
-            filtered: filterResult.passedIds.length,
-            pushed: topIds.length,
-          },
-          reasoning: '兜底安全网触发: Agent 未产出有效推送',
+          output: { alertEmail: this.alertEmail || 'not_configured' },
+          reasoning: '兜底安全网触发: Agent 未产出有效推送，已发送告警邮件',
           durationMs: 0,
         }),
       );
 
       return {
-        success: pushResult.success,
-        message: `兜底推送完成: ${topIds.length} 篇内容`,
-        contentCount: topIds.length,
+        success: false,
+        message: '已发送告警邮件通知（未发送低质量兜底推送）',
+        contentCount: 0,
       };
     } catch (error) {
       this.logger.error(
-        `[${sessionId}] 兜底执行也失败了: ${(error as Error).message}`,
+        `[${sessionId}] 兜底告警也失败了: ${(error as Error).message}`,
       );
       return {
         success: false,
-        message: `兜底执行失败: ${(error as Error).message}`,
+        message: `兜底告警失败: ${(error as Error).message}`,
         contentCount: 0,
       };
     }
@@ -828,55 +867,16 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
 
         let response: OpenAI.ChatCompletion;
         try {
-          response = await this.openai.chat.completions.create({
-            model: this.getCurrentModel(),
-            max_tokens: 4096,
+          response = await this.callLLMWithRetry(
+            sessionId,
             messages,
-            tools: tools as OpenAI.ChatCompletionTool[],
-            tool_choice: 'auto',
-          });
+            tools as OpenAI.ChatCompletionTool[],
+          );
         } catch (error) {
-          // 限频检测：切换备用模型重试
-          if (
-            this.isRateLimitError(error) &&
-            this.fallbackModel &&
-            !this.usingFallback
-          ) {
-            this.logger.warn(
-              `[${sessionId}] LLM 限频，切换到备用模型 ${this.fallbackModel}`,
-            );
-            this.usingFallback = true;
-            void this.sendRateLimitAlert(
-              'AgentService.runAnalysisOnly',
-              (error as Error).message,
-              this.fallbackModel,
-            );
-            try {
-              response = await this.openai.chat.completions.create({
-                model: this.fallbackModel,
-                max_tokens: 4096,
-                messages,
-                tools: tools as OpenAI.ChatCompletionTool[],
-                tool_choice: 'auto',
-              });
-            } catch (retryError) {
-              this.logger.error(
-                `[${sessionId}] 备用模型也失败: ${(retryError as Error).message}`,
-              );
-              break;
-            }
-          } else {
-            if (this.isRateLimitError(error)) {
-              void this.sendRateLimitAlert(
-                'AgentService.runAnalysisOnly',
-                (error as Error).message,
-              );
-            }
-            this.logger.error(
-              `[${sessionId}] LLM 调用失败: ${(error as Error).message}`,
-            );
-            break;
-          }
+          this.logger.error(
+            `[${sessionId}] LLM 调用最终失败: ${(error as Error).message}`,
+          );
+          break;
         }
 
         const choice = response.choices[0];

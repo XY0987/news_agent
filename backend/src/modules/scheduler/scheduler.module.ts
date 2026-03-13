@@ -1,11 +1,11 @@
 import { Module } from '@nestjs/common';
 import { SchedulerService } from './scheduler.service';
 import { AgentModule } from '../agent/agent.module';
-import { CollectorModule } from '../collector/collector.module';
 import { UserModule } from '../user/user.module';
+import { NotificationModule } from '../notification/notification.module';
 
 @Module({
-  imports: [AgentModule, CollectorModule, UserModule],
+  imports: [AgentModule, UserModule, NotificationModule],
   providers: [SchedulerService],
   exports: [SchedulerService],
 })
