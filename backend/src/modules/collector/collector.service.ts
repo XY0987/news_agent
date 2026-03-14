@@ -13,6 +13,8 @@ export interface CollectResult {
   newSaved: number;
   duplicatesSkipped: number;
   errors: string[];
+  /** 本次新保存到数据库的内容 ID 列表 */
+  savedContentIds: string[];
 }
 
 @Injectable()
@@ -59,6 +61,7 @@ export class CollectorService {
           newSaved: 0,
           duplicatesSkipped: 0,
           errors: [msg],
+          savedContentIds: [],
         });
       }
     }
@@ -87,6 +90,7 @@ export class CollectorService {
           newSaved: 0,
           duplicatesSkipped: 0,
           errors: [msg],
+          savedContentIds: [],
         });
       }
     }
@@ -120,6 +124,7 @@ export class CollectorService {
           newSaved: 0,
           duplicatesSkipped: 0,
           errors: [msg],
+          savedContentIds: [],
         },
       ];
     }
@@ -165,7 +170,7 @@ export class CollectorService {
     }
 
     // 写入数据库（URL 去重）
-    const { newSaved, duplicatesSkipped } =
+    const { newSaved, duplicatesSkipped, savedIds } =
       await this.saveContents(rawContents);
 
     // 更新每个数据源的最后采集时间和统计
@@ -203,6 +208,7 @@ export class CollectorService {
       newSaved,
       duplicatesSkipped,
       errors,
+      savedContentIds: savedIds,
     };
   }
 
@@ -211,9 +217,10 @@ export class CollectorService {
    */
   private async saveContents(
     rawContents: RawContent[],
-  ): Promise<{ newSaved: number; duplicatesSkipped: number }> {
+  ): Promise<{ newSaved: number; duplicatesSkipped: number; savedIds: string[] }> {
     let newSaved = 0;
     let duplicatesSkipped = 0;
+    const savedIds: string[] = [];
 
     for (const raw of rawContents) {
       try {
@@ -256,6 +263,7 @@ export class CollectorService {
         });
 
         await this.contentRepo.save(entity);
+        savedIds.push(entity.id);
         newSaved++;
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
@@ -271,7 +279,7 @@ export class CollectorService {
     this.logger.log(
       `内容保存完成: 新增 ${newSaved}, 去重跳过 ${duplicatesSkipped}`,
     );
-    return { newSaved, duplicatesSkipped };
+    return { newSaved, duplicatesSkipped, savedIds };
   }
 
   /**

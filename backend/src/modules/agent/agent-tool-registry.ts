@@ -245,7 +245,7 @@ export class AgentToolRegistry {
     this.register({
       name: 'collect_wechat',
       description:
-        '从微信公众号采集最新文章。根据用户配置的公众号数据源进行采集。返回采集结果统计。',
+        '从微信公众号采集最新文章。根据用户配置的公众号数据源进行采集。返回采集结果统计和 savedContentIds（新保存到数据库的内容 ID 列表）。请将 savedContentIds 传递给 filter_and_dedup 的 contentIds 参数。',
       parameters: {
         type: 'object',
         properties: {
@@ -260,17 +260,25 @@ export class AgentToolRegistry {
         required: ['userId'],
       },
       execute: async ({ userId, sourceIds }) => {
-        if (sourceIds && sourceIds.length > 0) {
-          return this.collectorService.collectBySources(sourceIds);
-        }
-        return this.collectorService.collectByUser(userId);
+        const results = sourceIds && sourceIds.length > 0
+          ? await this.collectorService.collectBySources(sourceIds)
+          : await this.collectorService.collectByUser(userId);
+
+        const allSavedIds = results.flatMap((r) => r.savedContentIds || []);
+
+        return {
+          results,
+          savedContentIds: allSavedIds,
+          totalNewSaved: allSavedIds.length,
+          hint: '请将 savedContentIds 传给 filter_and_dedup 的 contentIds 参数',
+        };
       },
     });
 
     this.register({
       name: 'collect_github',
       description:
-        '从 GitHub 热点数据源采集最新的热门仓库。支持 GitHub Trending、TrendingRepos API、GitHub Topics/frontend 三大来源。返回采集结果统计。',
+        '从 GitHub 热点数据源采集最新的热门仓库。支持 GitHub Trending、GitHub Topics/frontend 等来源。返回采集结果统计和 savedContentIds（新保存到数据库的内容 ID 列表）。重要：请将返回的 savedContentIds 传递给 filter_and_dedup 的 contentIds 参数，以确保只处理本次采集的 GitHub 内容。',
       parameters: {
         type: 'object',
         properties: {
@@ -285,17 +293,26 @@ export class AgentToolRegistry {
         required: ['userId'],
       },
       execute: async ({ userId, sourceIds }) => {
-        if (sourceIds && sourceIds.length > 0) {
-          return this.collectorService.collectBySources(sourceIds);
-        }
-        return this.collectorService.collectGithubByUser(userId);
+        const results = sourceIds && sourceIds.length > 0
+          ? await this.collectorService.collectBySources(sourceIds)
+          : await this.collectorService.collectGithubByUser(userId);
+
+        // 汇总所有 savedContentIds
+        const allSavedIds = results.flatMap((r) => r.savedContentIds || []);
+
+        return {
+          results,
+          savedContentIds: allSavedIds,
+          totalNewSaved: allSavedIds.length,
+          hint: '请将 savedContentIds 传给 filter_and_dedup 的 contentIds 参数',
+        };
       },
     });
 
     this.register({
       name: 'filter_and_dedup',
       description:
-        '对采集到的内容进行去重和基础过滤（去垃圾、去广告、去过短内容、时间窗口过滤）。返回过滤后的内容 ID 列表。',
+        '对采集到的内容进行去重和基础过滤（去垃圾、去广告、去过短内容、时间窗口过滤）。返回过滤后的内容 ID 列表。重要提示：为避免混入其他类型的内容，请务必将 collect_github/collect_wechat 返回的 savedContentIds 传入 contentIds 参数。如果不传 contentIds，将从数据库获取最近所有类型的内容（可能包含公众号等非目标内容），此时应搭配 sourceType 参数过滤。',
       parameters: {
         type: 'object',
         properties: {
@@ -303,9 +320,14 @@ export class AgentToolRegistry {
             type: 'array',
             items: { type: 'string' },
             description:
-              '待过滤的内容 ID 列表。如果不传，则从数据库获取用户最近未处理的内容。',
+              '待过滤的内容 ID 列表。强烈建议传入采集步骤返回的 savedContentIds，以确保只处理目标来源的内容。',
           },
           userId: { type: 'string', description: '用户 ID' },
+          sourceType: {
+            type: 'string',
+            description:
+              '按数据源类型过滤，如 "github" 或 "wechat"。当不传 contentIds 时必须传此参数，避免混入其他来源内容。',
+          },
           minLength: {
             type: 'number',
             description: '最小内容长度，默认 100 字',
@@ -317,10 +339,11 @@ export class AgentToolRegistry {
         },
         required: ['userId'],
       },
-      execute: async ({ contentIds, userId, minLength, daysWindow }) => {
+      execute: async ({ contentIds, userId, sourceType, minLength, daysWindow }) => {
         return this.filterService.filterAndDedup({
           contentIds,
           userId,
+          sourceType,
           minLength: minLength || 100,
           daysWindow: daysWindow || 7,
         });

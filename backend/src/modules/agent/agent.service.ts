@@ -626,9 +626,9 @@ export class AgentService {
 - get_user_sources: 获取用户的数据源列表
 
 ### 行动类工具
-- collect_wechat: 从微信公众号采集最新文章
-- collect_github: 从 GitHub 热点数据源采集热门仓库（支持 Trending、Most Popular、Topics/frontend）
-- filter_and_dedup: 对内容进行去重和过滤
+- collect_wechat: 从微信公众号采集最新文章。**返回 savedContentIds（新保存到数据库的内容 ID 列表）**
+- collect_github: 从 GitHub 热点数据源采集热门仓库（支持 Trending、Topics/frontend）。**返回 savedContentIds**
+- filter_and_dedup: 对内容进行去重和过滤。**必须传入采集步骤返回的 savedContentIds 作为 contentIds 参数**
 - score_contents: 对内容进行初步规则评分（快速预筛，非最终评分）
 - generate_summary: 为单篇内容生成 AI 摘要+精准 AI 评分（会覆盖规则评分）
 - batch_generate_summaries: 批量生成 AI 摘要+评分（建议不超过 10 条）
@@ -654,13 +654,17 @@ export class AgentService {
 1. 读取用户画像和最近反馈
 2. 查询历史决策经验
 3. 获取用户数据源列表
-4. 采集内容
-5. 过滤去重
+4. 采集内容（collect_wechat/collect_github），**记录每个采集工具返回的 savedContentIds**
+5. 过滤去重（filter_and_dedup），**必须将采集步骤返回的 savedContentIds 传入 contentIds 参数**。如果有多个采集步骤，合并所有 savedContentIds 后传入
 6. 对过滤后的**所有文章**分批生成 AI 摘要+评分（batch_generate_summaries，每批最多 10 条）
    - AI 摘要会同时产出精准的多维度评分，不需要提前调用 score_contents
 7. 发送推送（传入所有 successIds）
 8. 分析来源质量（可选）
 9. 记录本次决策经验
+
+## ⚠️ 数据流转规则（重要）
+采集 → savedContentIds → filter_and_dedup(contentIds=savedContentIds) → passedIds → batch_generate_summaries → successIds → send_daily_digest
+**不要**调用 filter_and_dedup 时不传 contentIds，否则会从数据库获取所有内容，可能包含过期或非目标内容。
 
 ## 用户画像
 ${JSON.stringify(user.profile || {}, null, 2)}
@@ -939,8 +943,8 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
 - query_memory: 查询历史决策经验
 
 ### 行动类工具
-- collect_github: 从 GitHub 热点数据源采集最新热门仓库（Trending、Most Popular、Topics）
-- filter_and_dedup: 对采集到的内容进行去重和基础过滤
+- collect_github: 从 GitHub 热点数据源采集最新热门仓库（Trending、Topics）。**返回值包含 savedContentIds（新保存到数据库的内容 ID 列表）**
+- filter_and_dedup: 对采集到的内容进行去重和基础过滤。**必须传入 contentIds 参数**
 - score_contents: 规则预评分（可选，AI 摘要会产出更精准的评分）
 - generate_summary: 为单个仓库生成 AI 摘要+评分
 - batch_generate_summaries: 批量生成 AI 摘要+评分（建议每批不超过 10 条）
@@ -953,14 +957,27 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
 - store_memory: 存储决策经验
 - analyze_source_quality: 分析来源质量
 
-## 推荐工作流程
+## 推荐工作流程（严格按此执行）
 1. 读取用户画像（了解技术兴趣偏好）
 2. 获取用户的 GitHub 数据源列表
-3. 采集 GitHub 热点仓库（collect_github）
-4. 过滤去重（filter_and_dedup，注意设置 sourceType='github' 或合理的 daysWindow）
+3. 采集 GitHub 热点仓库（collect_github），**记录返回的 savedContentIds**
+4. 过滤去重（filter_and_dedup），**必须将上一步的 savedContentIds 传入 contentIds 参数**
 5. 对过滤后的仓库分批生成 AI 摘要+评分（batch_generate_summaries，每批最多 10 条）
 6. 发送 GitHub 热点邮件（send_github_trending，传入所有 successIds）
 7. 记录本次决策经验（可选）
+
+## ⚠️ 数据流转规则（极其重要，必须遵守）
+
+整个流程的数据通过 ID 列表流转：
+
+\`\`\`
+collect_github → savedContentIds → filter_and_dedup(contentIds=savedContentIds) → passedIds → batch_generate_summaries(contentIds=passedIds) → successIds → send_github_trending(contentIds=successIds)
+\`\`\`
+
+**关键约束**：
+- collect_github 返回的 savedContentIds 必须直接传给 filter_and_dedup 的 contentIds 参数
+- **绝对不要**调用 filter_and_dedup 时不传 contentIds，否则会从数据库获取所有来源的内容（包括公众号），导致混入非 GitHub 内容
+- 如果 collect_github 返回的 savedContentIds 为空（全部是去重跳过的旧数据），可以额外调用 filter_and_dedup 并设置 sourceType='github' 来获取近期 GitHub 内容
 
 ## 用户画像
 ${JSON.stringify(user.profile || {}, null, 2)}

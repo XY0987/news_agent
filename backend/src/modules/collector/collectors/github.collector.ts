@@ -316,109 +316,30 @@ export class GithubCollector extends BaseCollector {
     return repos;
   }
 
-  // ====== 数据源 2: TrendingRepos API ======
+  // ====== 数据源 2: GitHub Trending (不同时间维度) ======
+  //
+  // 原 TrendingRepos API (trendingrepos.glup3.dev/api/repos) 已不可用（404）。
+  // 该网站没有开放的公共 REST API，内部数据来自 GitHub GraphQL API + TimescaleDB。
+  // 现改为：直接抓取 GitHub Trending 的 daily 页面作为替代数据源，
+  // 与默认的 monthly 维度互补，提供更多时效性数据。
 
   private async fetchTrendingReposApi(
     time: string = 'daily',
   ): Promise<GithubRepoInfo[]> {
-    const url = `${this.config.trendingReposApiUrl}/api/repos`;
-    this.logger.log(`抓取 TrendingRepos API: ${url}?time=${time}`);
+    // 映射 time 参数到 GitHub Trending 的 since 参数
+    const sinceMap: Record<string, 'daily' | 'weekly' | 'monthly'> = {
+      daily: 'daily',
+      weekly: 'weekly',
+      monthly: 'monthly',
+    };
+    const since = sinceMap[time] || 'daily';
 
-    try {
-      const resp = await this.httpClient.get(url, {
-        params: { time, page: 1 },
-        headers: { Accept: 'application/json' },
-      });
+    this.logger.log(
+      `TrendingRepos API 不可用，降级为 GitHub Trending (since=${since})`,
+    );
 
-      const data = resp.data;
-      // 该 API 返回一个数组或 { data: [...] } 格式
-      const items: any[] = Array.isArray(data) ? data : data?.data || data?.repos || [];
-
-      const repos: GithubRepoInfo[] = [];
-
-      for (const item of items) {
-        if (repos.length >= this.config.maxPerSource) break;
-
-        const fullName =
-          item.fullName ||
-          item.full_name ||
-          item.name ||
-          `${item.owner || item.author || 'unknown'}/${item.repo || item.repository || 'unknown'}`;
-
-        repos.push({
-          fullName,
-          description: item.description || item.desc || '',
-          language: item.language || item.lang || '',
-          stars: item.stars || item.stargazers_count || item.currentStars || 0,
-          starsToday: item.starsDiff || item.starsToday || item.stars_today || item.todayStars || 0,
-          forks: item.forks || item.forks_count || 0,
-          url: item.url || item.html_url || `https://github.com/${fullName}`,
-          trendSource: 'trendingrepos_api',
-        });
-      }
-
-      this.logger.log(
-        `TrendingRepos API (${time}): 获取 ${repos.length} 个仓库`,
-      );
-      return repos;
-    } catch (error) {
-      this.logger.error(
-        `TrendingRepos API 抓取失败: ${(error as Error).message}`,
-      );
-      // 降级：尝试抓取页面
-      return this.fetchTrendingReposPage(time);
-    }
-  }
-
-  /**
-   * TrendingRepos 降级方案：抓取页面 HTML
-   */
-  private async fetchTrendingReposPage(
-    time: string,
-  ): Promise<GithubRepoInfo[]> {
-    const url = `${this.config.trendingReposApiUrl}/?time=${time}`;
-    this.logger.log(`TrendingRepos 降级抓取页面: ${url}`);
-
-    try {
-      const resp = await this.httpClient.get(url);
-      const $ = cheerio.load(resp.data);
-      const repos: GithubRepoInfo[] = [];
-
-      // 尝试多种选择器匹配
-      $('a[href*="github.com/"]').each((_i, el) => {
-        if (repos.length >= this.config.maxPerSource) return false;
-        const href = $(el).attr('href') || '';
-        const match = href.match(
-          /github\.com\/([a-zA-Z0-9_-]+\/[a-zA-Z0-9_.-]+)/,
-        );
-        if (!match) return;
-        const fullName = match[1];
-        // 避免重复
-        if (repos.some((r) => r.fullName === fullName)) return;
-
-        const text = $(el).text().trim();
-        repos.push({
-          fullName,
-          description: text || '',
-          language: '',
-          stars: 0,
-          starsToday: 0,
-          forks: 0,
-          url: `https://github.com/${fullName}`,
-          trendSource: 'trendingrepos_api',
-        });
-      });
-
-      this.logger.log(
-        `TrendingRepos 降级页面: 解析到 ${repos.length} 个仓库`,
-      );
-      return repos;
-    } catch (error) {
-      this.logger.error(
-        `TrendingRepos 降级也失败: ${(error as Error).message}`,
-      );
-      return [];
-    }
+    // 直接复用 GitHub Trending 页面抓取，但使用不同的时间维度
+    return this.fetchGithubTrending(since);
   }
 
   // ====== 数据源 3: GitHub Topics 页面解析 ======
