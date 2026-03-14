@@ -24,6 +24,8 @@ export default () => ({
     apiKey: process.env.LLM_API_KEY || '',
     model: process.env.LLM_MODEL || 'gpt-4o',
     fallbackModel: process.env.LLM_FALLBACK_MODEL || '',
+    /** 每分钟最大 LLM 请求数（主动限速） */
+    rpm: parseInt(process.env.LLM_RPM ?? '10', 10),
   },
 
   alert: {

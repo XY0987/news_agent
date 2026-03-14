@@ -17,6 +17,7 @@ import { FeedbackModule } from './modules/feedback/feedback.module';
 import { DigestModule } from './modules/digest/digest.module';
 import { SchedulerModule } from './modules/scheduler/scheduler.module';
 import { RedisModule } from './common/redis/redis.module';
+import { LlmRateLimiterModule } from './common/llm-rate-limiter/llm-rate-limiter.module';
 
 @Module({
   imports: [
@@ -56,6 +57,9 @@ import { RedisModule } from './common/redis/redis.module';
 
     // Redis
     RedisModule,
+
+    // LLM 请求限流（全局模块）
+    LlmRateLimiterModule,
 
     // 业务模块
     UserModule,

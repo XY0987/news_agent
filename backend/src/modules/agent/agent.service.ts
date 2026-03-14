@@ -9,6 +9,7 @@ import { AgentLogEntity } from '../../common/database/entities/agent-log.entity'
 import { EmailChannel } from '../notification/channels/email.channel';
 import { UserService } from '../user/user.service';
 import { SourceService } from '../source/source.service';
+import { LlmRateLimiterService } from '../../common/llm-rate-limiter/llm-rate-limiter.service.js';
 import type {
   AgentResult,
   AgentStep,
@@ -47,6 +48,7 @@ export class AgentService {
     private readonly userService: UserService,
     private readonly sourceService: SourceService,
     private readonly configService: ConfigService,
+    private readonly rateLimiter: LlmRateLimiterService,
   ) {
     const baseURL =
       this.configService.get<string>('LLM_URL') || 'https://api.openai.com/v1';
@@ -174,14 +176,16 @@ export class AgentService {
     messages: OpenAI.ChatCompletionMessageParam[],
     tools: OpenAI.ChatCompletionTool[],
   ): Promise<OpenAI.ChatCompletion> {
-    const callLLM = (model: string) =>
-      this.openai.chat.completions.create({
+    const callLLM = async (model: string) => {
+      await this.rateLimiter.acquire(`Agent[${sessionId}]`);
+      return this.openai.chat.completions.create({
         model,
         max_tokens: 4096,
         messages,
         tools,
         tool_choice: 'auto',
       });
+    };
 
     const sleep = (ms: number) =>
       new Promise<void>((resolve) => setTimeout(resolve, ms));

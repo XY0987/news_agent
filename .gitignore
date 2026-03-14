@@ -13,6 +13,7 @@ frontend/dist/
 # IDE
 .vscode/
 .idea/
+.codebuddy/
 *.swp
 *.swo
 

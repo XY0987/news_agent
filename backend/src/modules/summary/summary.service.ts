@@ -8,6 +8,7 @@ import { UserEntity } from '../../common/database/entities/user.entity';
 import { UserContentInteractionEntity } from '../../common/database/entities/user-content-interaction.entity';
 import { ContentScoreEntity } from '../../common/database/entities/content-score.entity';
 import { EmailChannel } from '../notification/channels/email.channel';
+import { LlmRateLimiterService } from '../../common/llm-rate-limiter/llm-rate-limiter.service.js';
 
 export interface SummaryResult {
   contentId: string;
@@ -49,6 +50,7 @@ export class SummaryService {
     private readonly scoreRepo: Repository<ContentScoreEntity>,
     private readonly emailChannel: EmailChannel,
     private readonly configService: ConfigService,
+    private readonly rateLimiter: LlmRateLimiterService,
   ) {
     const baseURL =
       this.configService.get<string>('LLM_URL') || 'https://api.openai.com/v1';
@@ -341,6 +343,7 @@ ${textContent}
 
     let response: OpenAI.ChatCompletion;
     try {
+      await this.rateLimiter.acquire('Summary');
       response = await this.openai.chat.completions.create({
         model: this.getCurrentModel(),
         max_tokens: 8192,
@@ -363,6 +366,7 @@ ${textContent}
           (error as Error).message,
           this.fallbackModel,
         );
+        await this.rateLimiter.acquire('Summary-fallback');
         response = await this.openai.chat.completions.create({
           model: this.fallbackModel,
           max_tokens: 8192,
