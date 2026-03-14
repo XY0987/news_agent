@@ -6,6 +6,7 @@ import {
   IsNumber,
   IsArray,
   IsObject,
+  IsBoolean,
 } from 'class-validator';
 
 export class CreateUserDto {
@@ -109,6 +110,10 @@ export class UpdatePreferencesDto {
   @IsOptional()
   @IsString()
   quietHoursEnd?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  detailedNotify?: boolean;
 
   @IsOptional()
   @IsString()

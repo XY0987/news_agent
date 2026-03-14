@@ -29,6 +29,8 @@ export interface UserPreferences {
   topN: number;
   quietHoursStart: string;
   quietHoursEnd: string;
+  /** 详细运行通知：开启后 Agent 启动和失败时发送邮件通知 */
+  detailedNotify: boolean;
 }
 
 export interface Source {

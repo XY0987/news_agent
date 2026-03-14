@@ -20,11 +20,6 @@ interface PreferenceFormProps {
   onSave: (prefs: Partial<UserPreferences>) => Promise<void>;
 }
 
-const timeOptions = Array.from({ length: 24 }, (_, i) => {
-  const h = i.toString().padStart(2, "0");
-  return { value: `${h}:00`, label: `${h}:00` };
-});
-
 const topNOptions = [3, 5, 7, 10];
 
 export function PreferenceForm({ preferences, onSave }: PreferenceFormProps) {
@@ -34,6 +29,7 @@ export function PreferenceForm({ preferences, onSave }: PreferenceFormProps) {
     topN: preferences.topN || 5,
     quietHoursStart: preferences.quietHoursStart || "22:00",
     quietHoursEnd: preferences.quietHoursEnd || "08:00",
+    detailedNotify: preferences.detailedNotify ?? false,
   });
   const [saving, setSaving] = useState(false);
   const { toast } = useToast();
@@ -45,6 +41,7 @@ export function PreferenceForm({ preferences, onSave }: PreferenceFormProps) {
       topN: preferences.topN || 5,
       quietHoursStart: preferences.quietHoursStart || "22:00",
       quietHoursEnd: preferences.quietHoursEnd || "08:00",
+      detailedNotify: preferences.detailedNotify ?? false,
     });
   }, [preferences]);
 
@@ -81,21 +78,32 @@ export function PreferenceForm({ preferences, onSave }: PreferenceFormProps) {
         <CardContent className="space-y-5">
           <div className="space-y-2">
             <Label>每日推送时间</Label>
-            <Select
-              value={form.notifyTime}
-              onValueChange={(v) => setForm((f) => ({ ...f, notifyTime: v }))}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {timeOptions.map((t) => (
-                  <SelectItem key={t.value} value={t.value}>
-                    {t.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Input
+              type="time"
+              value={form.notifyTime || "08:00"}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, notifyTime: e.target.value }))
+              }
+              className="w-full"
+            />
+            <p className="text-xs text-muted-foreground">
+              Agent 将在此时间自动启动，执行采集、评分、摘要、推送全流程
+            </p>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">详细运行通知</p>
+              <p className="text-xs text-muted-foreground">
+                开启后 Agent 启动时发送通知邮件，失败时发送详细报错信息
+              </p>
+            </div>
+            <Switch
+              checked={form.detailedNotify ?? false}
+              onCheckedChange={(v) =>
+                setForm((f) => ({ ...f, detailedNotify: v }))
+              }
+            />
           </div>
 
           <div className="space-y-2">
@@ -159,43 +167,23 @@ export function PreferenceForm({ preferences, onSave }: PreferenceFormProps) {
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>开始时间</Label>
-              <Select
-                value={form.quietHoursStart}
-                onValueChange={(v) =>
-                  setForm((f) => ({ ...f, quietHoursStart: v }))
+              <Input
+                type="time"
+                value={form.quietHoursStart || "22:00"}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, quietHoursStart: e.target.value }))
                 }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {timeOptions.map((t) => (
-                    <SelectItem key={t.value} value={t.value}>
-                      {t.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              />
             </div>
             <div className="space-y-2">
               <Label>结束时间</Label>
-              <Select
-                value={form.quietHoursEnd}
-                onValueChange={(v) =>
-                  setForm((f) => ({ ...f, quietHoursEnd: v }))
+              <Input
+                type="time"
+                value={form.quietHoursEnd || "08:00"}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, quietHoursEnd: e.target.value }))
                 }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {timeOptions.map((t) => (
-                    <SelectItem key={t.value} value={t.value}>
-                      {t.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              />
             </div>
           </div>
           <p className="text-xs text-muted-foreground">

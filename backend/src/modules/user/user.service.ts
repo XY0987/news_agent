@@ -23,9 +23,10 @@ export class UserService {
       profile: dto.profile || {},
       preferences: dto.preferences || {
         pushFrequency: 'daily',
-        pushTime: '08:00',
-        pushChannels: ['email'],
+        notifyTime: '08:00',
+        notifyChannels: ['email'],
         topN: 5,
+        detailedNotify: false,
         scoreWeights: {
           relevance: 0.45,
           quality: 0.2,
