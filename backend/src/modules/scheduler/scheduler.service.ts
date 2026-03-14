@@ -44,15 +44,28 @@ export class SchedulerService {
    */
   @Cron('0 * * * * *', { name: 'daily-agent-poll' })
   async handleAgentPoll(): Promise<void> {
+    // 始终使用中国时区（Asia/Shanghai），避免服务器 UTC 时区导致时间不匹配
     const now = new Date();
-    const todayStr = now.toISOString().slice(0, 10); // YYYY-MM-DD
-    const currentHHMM = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+    const cnFormatter = new Intl.DateTimeFormat('zh-CN', {
+      timeZone: 'Asia/Shanghai',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+    const parts = cnFormatter.formatToParts(now);
+    const get = (type: string) =>
+      parts.find((p) => p.type === type)?.value || '00';
+    const todayStr = `${get('year')}-${get('month')}-${get('day')}`;
+    const currentHHMM = `${get('hour')}:${get('minute')}`;
 
     // 跨天重置已执行集合
     if (this.currentDate !== todayStr) {
       this.todayExecutedUsers.clear();
       this.currentDate = todayStr;
-      this.logger.log(`日期切换至 ${todayStr}，重置已执行用户列表`);
+      this.logger.log(`日期切换至 ${todayStr}，重置已执行用户列表（时区: Asia/Shanghai）`);
     }
 
     try {
@@ -62,7 +75,7 @@ export class SchedulerService {
       for (const user of users) {
         const notifyTime = this.getUserNotifyTime(user);
 
-        // 匹配当前整点 + 今日未执行 + 当前未在运行
+        // 匹配当前时刻（北京时间 HH:MM）+ 今日未执行 + 当前未在运行
         if (
           notifyTime === currentHHMM &&
           !this.todayExecutedUsers.has(user.id) &&
