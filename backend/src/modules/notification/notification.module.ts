@@ -8,6 +8,7 @@ import { ContentScoreEntity } from '../../common/database/entities/content-score
 import { UserEntity } from '../../common/database/entities/user.entity';
 import { DigestEntity } from '../../common/database/entities/digest.entity';
 import { UserContentInteractionEntity } from '../../common/database/entities/user-content-interaction.entity';
+import { SourceEntity } from '../../common/database/entities/source.entity';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { UserContentInteractionEntity } from '../../common/database/entities/use
       UserEntity,
       DigestEntity,
       UserContentInteractionEntity,
+      SourceEntity,
     ]),
   ],
   controllers: [NotificationController],

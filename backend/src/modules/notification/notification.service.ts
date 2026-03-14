@@ -6,6 +6,7 @@ import { ContentScoreEntity } from '../../common/database/entities/content-score
 import { UserEntity } from '../../common/database/entities/user.entity';
 import { DigestEntity } from '../../common/database/entities/digest.entity';
 import { UserContentInteractionEntity } from '../../common/database/entities/user-content-interaction.entity';
+import { SourceEntity } from '../../common/database/entities/source.entity';
 import { EmailChannel } from './channels/email.channel';
 
 @Injectable()
@@ -23,6 +24,8 @@ export class NotificationService {
     private readonly digestRepo: Repository<DigestEntity>,
     @InjectRepository(UserContentInteractionEntity)
     private readonly interactionRepo: Repository<UserContentInteractionEntity>,
+    @InjectRepository(SourceEntity)
+    private readonly sourceRepo: Repository<SourceEntity>,
     private readonly emailChannel: EmailChannel,
   ) {}
 
@@ -100,6 +103,22 @@ export class NotificationService {
 
     const contents = await this.contentRepo.findBy({ id: In(contentIds) });
 
+    // 按 Source 类型分流：GitHub 内容复用 sendGithubTrending，文章走 sendViaEmail
+    const sourceIds = [...new Set(contents.map((c) => c.sourceId).filter(Boolean))];
+    const sources = sourceIds.length > 0
+      ? await this.sourceRepo.findBy({ id: In(sourceIds) })
+      : [];
+    const githubSourceIds = new Set(sources.filter((s) => s.type === 'github').map((s) => s.id));
+
+    const articleContentIds = contentIds.filter((id) => {
+      const c = contents.find((ct) => ct.id === id);
+      return c && !githubSourceIds.has(c.sourceId);
+    });
+    const githubContentIds = contentIds.filter((id) => {
+      const c = contents.find((ct) => ct.id === id);
+      return c && githubSourceIds.has(c.sourceId);
+    });
+
     // 获取评分信息
     const scores = await this.scoreRepo.find({
       where: { userId, contentId: In(contentIds) },
@@ -134,18 +153,23 @@ export class NotificationService {
     // 通过各渠道发送
     const channelResults: Record<string, any> = {};
 
-    // 邮件发送
-    const emailResult = await this.sendViaEmail(
-      user,
-      contents,
-      scoreMap,
-      interactionMap,
-      agentNote,
-    );
-    channelResults.email = emailResult;
+    // 1. 文章邮件
+    if (articleContentIds.length > 0) {
+      const articleContents = contents.filter((c) => !githubSourceIds.has(c.sourceId));
+      channelResults.email = await this.sendViaEmail(
+        user, articleContents, scoreMap, interactionMap, agentNote,
+      );
+    }
+
+    // 2. GitHub 邮件（复用已有的 sendGithubTrending）
+    if (githubContentIds.length > 0) {
+      const ghResult = await this.sendGithubTrending({ userId, contentIds: githubContentIds, agentNote });
+      channelResults.github = { success: ghResult.success, message: ghResult.message };
+    }
 
     // 更新推送时间
-    if (emailResult.success) {
+    const anySuccess = Object.values(channelResults).some((r: any) => r.success);
+    if (anySuccess) {
       savedDigest.sentAt = new Date();
       await this.digestRepo.save(savedDigest);
 
@@ -160,24 +184,22 @@ export class NotificationService {
       }
     }
 
-    const allSuccess = Object.values(channelResults).some((r: any) => r.success);
-
     this.logger.log(
-      `每日精选推送: userId=${userId}, 内容 ${contentIds.length} 篇, digestId=${savedDigest.id}, 邮件=${emailResult.success ? '✓' : '✗'}`,
+      `每日精选推送: userId=${userId}, 文章 ${articleContentIds.length} 篇, GitHub ${githubContentIds.length} 个, digestId=${savedDigest.id}`,
     );
 
     return {
-      success: allSuccess,
-      message: allSuccess
-        ? `每日精选推送成功，包含 ${contentIds.length} 篇内容`
-        : `推送已保存但发送失败: ${emailResult.error || '未知错误'}`,
+      success: anySuccess,
+      message: anySuccess
+        ? `推送成功：文章 ${articleContentIds.length} 篇, GitHub 仓库 ${githubContentIds.length} 个`
+        : `推送已保存但发送失败`,
       digestId: savedDigest.id,
       channels: channelResults,
     };
   }
 
   /**
-   * 通过邮件发送每日精选
+   * 通过邮件发送每日精选（纯文章）
    */
   private async sendViaEmail(
     user: UserEntity,

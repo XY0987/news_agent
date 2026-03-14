@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
 import { Repository, In } from 'typeorm';
 import { ContentEntity } from '../../common/database/entities/content.entity.js';
 import { SourceEntity } from '../../common/database/entities/source.entity.js';
@@ -26,6 +27,7 @@ export class CollectorService {
     private readonly contentRepo: Repository<ContentEntity>,
     @InjectRepository(SourceEntity)
     private readonly sourceRepo: Repository<SourceEntity>,
+    private readonly configService: ConfigService,
     private readonly wechatCollector: WechatCollector,
     private readonly githubCollector: GithubCollector,
   ) {}
@@ -47,6 +49,26 @@ export class CollectorService {
 
     // 按类型分组采集
     const grouped = this.groupByType(sources);
+
+    // 测试模式：按环境变量限制每种类型的源数量
+    const maxSourcesRaw = this.configService.get<string>('COLLECT_MAX_SOURCES');
+    const maxSources = maxSourcesRaw ? parseInt(maxSourcesRaw, 10) : 0;
+    if (maxSources > 0) {
+      const summary = Object.entries(grouped)
+        .map(([t, s]) => `${t}=${s.length}`)
+        .join(', ');
+      this.logger.warn(
+        `[测试模式] COLLECT_MAX_SOURCES=${maxSources}，各类型源数量: ${summary}`,
+      );
+      for (const type of Object.keys(grouped)) {
+        if (grouped[type].length > maxSources) {
+          this.logger.warn(
+            `[测试模式] ${type} 类型源从 ${grouped[type].length} 截断为 ${maxSources} 个`,
+          );
+          grouped[type] = grouped[type].slice(0, maxSources);
+        }
+      }
+    }
 
     for (const [type, typeSources] of Object.entries(grouped)) {
       try {

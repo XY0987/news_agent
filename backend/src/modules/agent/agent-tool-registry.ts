@@ -50,6 +50,13 @@ export class AgentToolRegistry {
   }
 
   /**
+   * 获取 NotificationService（供 AgentService 自动推送兜底使用）
+   */
+  getNotificationService(): NotificationService {
+    return this.notificationService;
+  }
+
+  /**
    * 执行指定 Tool
    */
   async executeTool(name: string, args: Record<string, any>): Promise<any> {

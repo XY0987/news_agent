@@ -1,6 +1,6 @@
 # 📰 News Agent — 智能新闻聚合与推送系统
 
-基于 LLM Agent 的**个人信息管家**。根据用户画像自动采集多源文章，经 AI 评分、摘要后个性化推送到邮箱，并通过记忆系统持续自我优化。Agent 基于 OpenAI Function Calling 协议，在 Agent Loop 中自主编排 14 种工具完成采集→评分→摘要→推送全流程。
+基于 LLM Agent 的**个人信息管家**。根据用户画像自动采集多源文章（微信公众号 + GitHub 热点），经 AI 评分、摘要后个性化推送到邮箱，并通过记忆系统持续自我优化。Agent 基于 OpenAI Function Calling 协议，在 Agent Loop 中自主编排 16 种工具完成采集→评分→摘要→推送全流程。
 
 ![NestJS](https://img.shields.io/badge/NestJS-11-E0234E?logo=nestjs)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react)
@@ -12,14 +12,15 @@
 
 ## ✨ 核心特性
 
-- **🤖 LLM Agent** — 基于 Function Calling 的 Agent Loop，LLM 自主编排 14 种工具完成全流程
-- **📡 多源内容采集** — 微信公众号已实现（正文抓取、限流、Token 过期检测），RSS/GitHub Trending 后续扩展中
+- **🤖 LLM Agent** — 基于 Function Calling 的 Agent Loop，LLM 自主编排 16 种工具完成全流程，支持 3 种运行模式（每日精选 / GitHub 热点 / 分析模式）
+- **📡 多源内容采集** — 微信公众号（正文抓取、限流、Token 过期检测）+ GitHub 热点（Trending/Topics 页面解析、多维度采集）
 - **🧠 双层评分体系** — 规则预评分（五维度加权）+ AI 深度评分（基于用户画像），自动覆盖合并
 - **✍️ AI 个性化摘要** — 基于用户画像和兴趣标签生成定制化摘要、关键要点和行动建议
-- **📧 智能邮件推送** — 高分文章完整展开（含摘要/评分拆解/行动建议），低分文章折叠展示
+- **📧 双模板邮件推送** — 每日精选（高分展开/低分折叠）+ GitHub 热点专属模板（Star 数、语言、趋势来源）
 - **🔄 LLM 容错机制** — 主动限速（滑动窗口 RPM 控制）+ 被动重试（限频 4 级重试 + 自动切换备用模型）+ 告警邮件通知，Agent 失败时不发低质量内容
 - **💾 Agent 记忆** — 持久化存储决策经验、来源质量评估、偏好变化，跨会话可检索
 - **🎨 完整管理前端** — 10 个页面，支持数据源管理、用户画像编辑、Agent 执行日志回溯等
+- **🧪 测试模式** — 通过环境变量 `COLLECT_MAX_SOURCES` 限制采集源数量，不改线上数据即可快速测试全流程
 
 ---
 
@@ -29,27 +30,29 @@
 ┌──────────────────────────────────────────────────────────┐
 │                     Frontend (:3000)                      │
 │       React 19 + Vite 7 + Zustand 5 + shadcn/ui         │
-│       10 个页面 · 35+ 个组件 · Tailwind CSS 暗色模式      │
+│       10 个页面 · 40+ 个组件 · Tailwind CSS 暗色模式      │
 └───────────────────────┬──────────────────────────────────┘
                         │ /api proxy
 ┌───────────────────────▼──────────────────────────────────┐
 │                     Backend (:8000)                       │
 │               NestJS 11 + TypeORM + OpenAI SDK           │
 │  ┌────────────────────────────────────────────────────┐  │
-│  │          Agent Loop (最多 25 步自主决策)             │  │
+│  │       Agent Loop（最多 25 步自主决策 × 3 模式）      │  │
 │  │                                                    │  │
-│  │  感知工具(4)        行动工具(6)      推送+记忆(4)   │  │
+│  │  感知工具(4)       行动工具(7)      推送+记忆(5)    │  │
 │  │  ┌────────────┐  ┌─────────────┐  ┌────────────┐  │  │
-│  │  │UserProfile │  │Collect(微信) │  │SendDigest  │  │  │
-│  │  │Feedback    │  │Filter+Dedup │  │StoreMemory │  │  │
-│  │  │QueryMemory │  │Score(规则)   │  │SourceQA    │  │  │
-│  │  │GetSources  │  │Summary(AI)  │  │SourceSuggest│ │  │
+│  │  │UserProfile │  │Collect(微信) │  │DailyDigest │  │  │
+│  │  │Feedback    │  │Collect(GH)  │  │GH Trending │  │  │
+│  │  │QueryMemory │  │Filter+Dedup │  │StoreMemory │  │  │
+│  │  │GetSources  │  │Score(规则)   │  │SourceQA    │  │  │
+│  │  │            │  │Summary(AI)  │  │SourceSuggest│ │  │
 │  │  │            │  │BatchSummary │  │            │  │  │
 │  │  │            │  │GetContents  │  │            │  │  │
 │  │  └────────────┘  └─────────────┘  └────────────┘  │  │
 │  └────────────────────────────────────────────────────┘  │
 │                                                          │
-│  Scheduler: 每天 08:00 全流程 · 每周日 10:00 周报(预留)   │
+│  Scheduler: 每分钟轮询用户推送时间 → 自动触发 Agent       │
+│  独立流程: 每日精选 Agent + GitHub 热点 Agent 并行执行     │
 └────────────┬──────────────────────────┬──────────────────┘
              │                          │
       ┌──────▼──────┐           ┌───────▼───────┐
@@ -71,26 +74,26 @@ news_agent/
 │   │   ├── llm-rate-limiter/     # LLM 请求主动限速（滑动窗口）
 │   │   └── redis/                # Redis 全局模块
 │   └── modules/
-│       ├── agent/                # 🤖 Agent Loop + Tool Registry（14 个工具）
-│       ├── collector/            # 📡 内容采集（微信公众号已实现，RSS/GitHub 扩展中）
+│       ├── agent/                # 🤖 Agent Loop + Tool Registry（16 个工具，3 种模式）
+│       ├── collector/            # 📡 内容采集（微信公众号 + GitHub Trending/Topics）
 │       ├── content/              # 📄 内容 CRUD + 关联查询
 │       ├── digest/               # 📰 推送记录管理
 │       ├── feedback/             # 👍 用户反馈收集
 │       ├── filter/               # 🔍 六层过滤链（URL/标题/长度/时间/黑名单/相似度）
 │       ├── memory/               # 🧠 Agent 记忆（关键词检索）
-│       ├── notification/         # 📧 邮件推送（SMTP + HTML 模板）
-│       ├── scheduler/            # ⏰ 定时任务（Cron 调度）
+│       ├── notification/         # 📧 邮件推送（SMTP + 双模板：每日精选 / GitHub 热点）
+│       ├── scheduler/            # ⏰ 定时任务（分钟轮询 + 防重复机制）
 │       ├── scorer/               # 📊 五维度规则评分
 │       ├── source/               # 📡 数据源管理
 │       ├── summary/              # ✍️ AI 摘要 + 深度评分（LLM 调用）
 │       └── user/                 # 👤 用户管理
 ├── frontend/src/
 │   ├── api/                      # 6 个 API 模块（Axios 封装 + 拦截器）
-│   ├── components/               # 35+ 个 UI 组件（shadcn/ui 基础 + 业务组件）
+│   ├── components/               # 40+ 个 UI 组件（shadcn/ui 基础 + 业务组件）
 │   │   ├── ui/                   # 17 个 shadcn/ui 基础组件
 │   │   ├── layout/               # 响应式布局（Sidebar + Header）
 │   │   ├── content/              # 内容卡片/详情/反馈
-│   │   ├── source/               # 数据源管理/微信搜索
+│   │   ├── source/               # 数据源管理/微信搜索/GitHub 添加
 │   │   ├── profile/              # 画像编辑/兴趣标签
 │   │   ├── agent/                # Agent 洞察
 │   │   └── common/               # 评分指示器/标签选择器
@@ -105,6 +108,14 @@ news_agent/
 ---
 
 ## 🤖 Agent 机制详解
+
+### 三种运行模式
+
+| 模式 | 入口方法 | 工具集 | 说明 |
+|------|---------|--------|------|
+| **每日精选** | `runDailyDigest(userId)` | 全部 16 个工具 | 全量采集→评分→摘要→推送，含记忆和来源分析 |
+| **GitHub 热点** | `runGithubTrending(userId)` | 12 个工具（排除微信相关） | 独立的 GitHub 热点采集推送流程 |
+| **分析模式** | `runAnalysisOnly(userId)` | 部分工具（跳过采集） | 对已采集内容进行评分摘要，不重新采集 |
 
 ### Agent Loop 流程
 
@@ -127,7 +138,7 @@ news_agent/
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 
-兜底安全网：循环结束后检测是否完成推送，未完成则发告警邮件而非低质量内容
+兜底安全网：循环结束后检测是否完成推送，未完成则自动推送已分析内容或发告警邮件
 ```
 
 ### LLM 主动限速
@@ -155,7 +166,7 @@ news_agent/
 抛出异常 + 发送限频告警邮件（1 小时冷却去重）
 ```
 
-### Agent 工具清单（14 个）
+### Agent 工具清单（16 个）
 
 | 类别 | 工具名 | 说明 |
 |------|--------|------|
@@ -164,12 +175,14 @@ news_agent/
 | **感知** | `query_memory` | 按关键词查询历史决策经验 |
 | **感知** | `get_user_sources` | 获取用户配置的数据源列表 |
 | **行动** | `collect_wechat` | 采集微信公众号文章（含正文抓取） |
+| **行动** | `collect_github` | 采集 GitHub 热点仓库（Trending/Topics） |
 | **行动** | `filter_and_dedup` | 六层过滤链去重 |
 | **行动** | `score_contents` | 五维度规则预评分 |
 | **行动** | `generate_summary` | 单篇 AI 摘要 + 深度评分 |
 | **行动** | `batch_generate_summaries` | 批量 AI 摘要（并发控制，每批 3 篇） |
 | **行动** | `get_recent_contents` | 获取内容列表（支持筛选/分页） |
 | **推送** | `send_daily_digest` | 发送每日精选邮件推送 |
+| **推送** | `send_github_trending` | 发送 GitHub 热点趋势专属邮件 |
 | **记忆** | `store_memory` | 存储决策经验/偏好变化/洞察 |
 | **记忆** | `analyze_source_quality` | 查询来源质量历史数据 |
 | **记忆** | `suggest_source_change` | 建议新增/移除数据源 |
@@ -339,17 +352,64 @@ npm run dev
 | `SMTP_FROM` | 📧 | 发件人邮箱 |
 | `WECHAT_TOKEN` | 🔧 | 微信公众号采集 Token |
 | `WECHAT_COOKIE` | 🔧 | 微信公众号 Cookie |
+| `WECHAT_MAX_AGE_DAYS` | | 微信文章最大保留天数，默认 7 天 |
+| `GITHUB_TOKEN` | 🔧 | GitHub Personal Access Token |
+| `COLLECT_MAX_SOURCES` | 🧪 | 测试模式：每种类型最多采集的源数量（不设或 `0` 表示不限制） |
 
-> ✅ 必填 · 📧 邮件推送需要 · 🔧 对应采集源需要
+> ✅ 必填 · 📧 邮件推送需要 · 🔧 对应采集源需要 · 🧪 测试/开发用
+
+---
+
+## 🧪 测试模式
+
+通过环境变量 `COLLECT_MAX_SOURCES` 可在不修改线上数据的情况下快速测试全流程。
+
+```bash
+# 在 backend/.env 中设置
+COLLECT_MAX_SOURCES=10   # 每种类型最多采集 10 个源
+```
+
+| 配置 | 效果 |
+|------|------|
+| `COLLECT_MAX_SOURCES=10` | 微信公众号最多采集 10 个，GitHub 最多采集 10 个 |
+| `COLLECT_MAX_SOURCES=5` | 各类型截断为 5 个 |
+| `COLLECT_MAX_SOURCES=0` 或不设 | 不限制，采集所有 active 数据源 |
+
+生效时日志会输出 `[测试模式]` 前缀：
+
+```
+[测试模式] COLLECT_MAX_SOURCES=10，各类型源数量: wechat=25, github=3
+[测试模式] wechat 类型源从 25 截断为 10 个
+```
+
+也可通过前端「系统设置」页面或 API 手动触发 Agent 运行：
+
+```bash
+# 手动触发每日精选
+curl -X POST http://localhost:8000/api/agent/run?userId=YOUR_USER_ID
+
+# 手动触发 GitHub 热点
+curl -X POST http://localhost:8000/api/agent/run-github?userId=YOUR_USER_ID
+```
 
 ---
 
 ## 📧 邮件推送效果
 
+### 每日精选邮件
+
 推送邮件自动按 AI 评分分层展示：
 
 - **🔥 精选推荐**（评分 ≥ 60）— 完整展开，包含 AI 摘要、五维度评分拆解、行动建议、阅读原文按钮
 - **📂 更多内容**（评分 < 60）— `<details>` 折叠展示，包含摘要，一行一篇紧凑排列
+
+### GitHub 热点邮件
+
+独立的 GitHub 专属模板：
+
+- 展示仓库 fullName、描述、编程语言、Star 数、新增 Star、Fork 数、趋势来源
+- AI 生成的仓库分析摘要和行动建议
+- 按 Star 数排序
 
 支持 HTML 渲染 + 纯文本降级，兼容各主流邮件客户端。
 
@@ -361,7 +421,7 @@ npm run dev
 |------|------|------|
 | 今日精选 | `/` | 查看当日 AI 推送的精选文章，按评分分区展示 |
 | 信息流 | `/feed` | 浏览所有已采集文章，支持筛选和分页 |
-| 数据源管理 | `/sources` | 添加/删除数据源，查看采集统计，微信搜索添加 |
+| 数据源管理 | `/sources` | 添加/删除数据源，查看采集统计，微信搜索添加，GitHub 源添加 |
 | Agent 洞察 | `/insights` | 查看 Agent 执行历史，回溯每步决策和工具调用 |
 | 用户画像 | `/profile` | 编辑个人画像、专业领域、经验水平 |
 | 偏好设置 | `/preferences` | 管理兴趣标签、排除标签、阅读偏好 |
@@ -374,10 +434,16 @@ npm run dev
 
 ## ⏰ 定时任务
 
-| 任务 | 时间 | 说明 |
-|------|------|------|
-| 每日 Agent 全流程 | 每天 08:00 | 采集 → 过滤 → 评分 → 摘要 → 推送，遍历所有用户 |
+| 任务 | 调度方式 | 说明 |
+|------|---------|------|
+| Agent 全流程 | **每分钟轮询**，匹配用户设定的 `notifyTime`（HH:MM 北京时间） | 自动触发每日精选 Agent + GitHub 热点 Agent |
 | 周报反思 | 每周日 10:00 | 预留功能，暂未实现 |
+
+**调度机制**：
+- 每分钟遍历所有用户，比较 `notifyTime` 与当前北京时间
+- 同一用户当天只执行一次（`todayExecutedUsers` 去重）
+- 每日精选和 GitHub 热点独立防重、独立执行
+- 支持 `detailedNotify` 偏好：开启后发送 Agent 启动通知和失败详情邮件
 
 > 也可通过前端「系统设置」页面或 API `POST /api/agent/run` 手动触发。
 
@@ -395,9 +461,9 @@ npm run dev
 | Redis (ioredis) | 5.9 | 微信凭证缓存 |
 | OpenAI SDK | 6.x | LLM 调用（兼容所有 OpenAI API 格式） |
 | @nestjs/schedule | 6.x | Cron 定时任务 |
-| Cheerio | 1.2 | 微信文章 HTML 正文解析 |
+| Cheerio | 1.2 | 微信文章/GitHub 页面 HTML 解析 |
 | Nodemailer | 8.x | SMTP 邮件发送 |
-| Axios | 1.13 | HTTP 请求（微信 API 调用） |
+| Axios | 1.13 | HTTP 请求（微信/GitHub API 调用） |
 
 ### 前端
 
@@ -420,16 +486,17 @@ npm run dev
 
 | 模块 | 状态 | 说明 |
 |------|------|------|
-| Agent Loop + 14 工具 | ✅ 已完成 | 完整的自主决策循环，含容错和兜底 |
-| 微信公众号采集 | ✅ 已完成 | 正文抓取、限流、Token 过期检测 |
+| Agent Loop + 16 工具 | ✅ 已完成 | 3 种模式（每日精选/GitHub 热点/分析），含容错和兜底 |
+| 微信公众号采集 | ✅ 已完成 | 正文抓取、限流、Token 过期检测、自动刷新 |
+| GitHub 热点采集 | ✅ 已完成 | Trending（daily/weekly/monthly）+ Topics 页面解析，跨源去重 |
 | AI 摘要 + 评分 | ✅ 已完成 | LLM 生成摘要、评分，降级为规则摘要 |
-| 邮件推送 | ✅ 已完成 | HTML 分层模板，纯文本降级 |
+| 邮件推送 | ✅ 已完成 | 双模板（每日精选 + GitHub 热点），纯文本降级 |
 | Agent 记忆 | ✅ 已完成 | 基于关键词检索的 MySQL 持久化 |
-| 前端管理界面 | ✅ 已完成 | 10 个页面，响应式设计 |
-| 定时调度 | ✅ 已完成 | 每日全流程 Cron 任务 |
+| 前端管理界面 | ✅ 已完成 | 10 个页面，40+ 组件，响应式设计 |
+| 定时调度 | ✅ 已完成 | 分钟轮询 + 用户推送时间匹配 + 防重复 |
 | Docker 部署 | ✅ 已完成 | 多阶段构建 + 一键启动脚本 |
+| 测试模式 | ✅ 已完成 | 环境变量控制采集源数量，不改线上数据 |
 | RSS 采集器 | 🔜 计划中 | 基类已定义，后续实现 |
-| GitHub Trending 采集 | 🔜 计划中 | 同上 |
 | 用户认证 | 🔲 未实现 | 当前为单用户硬编码模式 |
 | Agent 实时交互 | 🔲 未实现 | 前端 AgentChat 组件为占位 |
 | 单元/集成测试 | 🔲 未覆盖 | Jest 已配置但暂无测试用例 |

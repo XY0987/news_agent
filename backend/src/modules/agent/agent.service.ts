@@ -256,35 +256,50 @@ export class AgentService {
     }
   }
 
+  // ==================== 通用 Agent Loop ====================
+
   /**
-   * 执行每日推送任务 - Agent 核心入口
+   * 通用 Agent Loop — 三个入口方法的公共逻辑
+   *
+   * 差异通过 config 参数注入：
+   * - label: 日志前缀（"Agent" / "GitHub Agent" / "Agent 分析"）
+   * - systemPrompt / userMessage: LLM 提示词
+   * - tools: 可用工具集（GitHub Agent 只给 GitHub 子集）
+   * - digestToolName: 用于检测推送是否成功的工具名
+   * - enableAutoDigest: 未推送时是否尝试自动推送已分析内容
+   * - enableFallbackAlert: 自动推送也失败时是否发告警邮件
    */
-  async runDailyDigest(userId: string): Promise<AgentResult> {
+  private async runAgentLoop(config: {
+    userId: string;
+    label: string;
+    systemPrompt: string;
+    userMessage: string;
+    tools: OpenAI.ChatCompletionTool[];
+    digestToolName: string;
+    defaultReport: string;
+    enableAutoDigest: boolean;
+    enableFallbackAlert: boolean;
+  }): Promise<AgentResult> {
+    const {
+      userId,
+      label,
+      systemPrompt,
+      userMessage,
+      tools,
+      digestToolName,
+      defaultReport,
+      enableAutoDigest,
+      enableFallbackAlert,
+    } = config;
+
     const sessionId = uuidv4();
     const startTime = Date.now();
-    this.logger.log(
-      `[${sessionId}] Agent 开始执行每日推送任务, userId=${userId}`,
-    );
+    this.logger.log(`[${sessionId}] ${label} 开始执行, userId=${userId}`);
 
     try {
-      // 获取用户画像
-      const user = await this.userService.findById(userId);
-      const tools = this.toolRegistry.getToolDefinitions();
-
-      // 构建初始消息
-      const systemPrompt = this.buildAgentSystemPrompt(user);
       const messages: OpenAI.ChatCompletionMessageParam[] = [
         { role: 'system', content: systemPrompt },
-        {
-          role: 'user',
-          content: `执行今日信息采集和推送任务。
-当前时间: ${new Date().toISOString()}
-用户 ID: ${userId}
-用户名: ${user.name}
-你的目标是为用户产出一份高质量的每日精选推送。
-请自主决定执行步骤，合理使用可用工具。
-完成后输出最终的执行报告。`,
-        },
+        { role: 'user', content: userMessage },
       ];
 
       const steps: AgentStep[] = [];
@@ -295,16 +310,13 @@ export class AgentService {
       for (let step = 0; step < this.maxSteps; step++) {
         const stepStart = Date.now();
 
-        // 1. 调用 LLM —— 让 Agent "思考"
-        this.logger.log(`[${sessionId}] Step ${step + 1}: 调用 LLM...`);
+        this.logger.log(
+          `[${sessionId}] ${label} Step ${step + 1}: 调用 LLM...`,
+        );
 
         let response: OpenAI.ChatCompletion;
         try {
-          response = await this.callLLMWithRetry(
-            sessionId,
-            messages,
-            tools as OpenAI.ChatCompletionTool[],
-          );
+          response = await this.callLLMWithRetry(sessionId, messages, tools);
         } catch (error) {
           this.logger.error(
             `[${sessionId}] LLM 调用最终失败: ${(error as Error).message}`,
@@ -337,11 +349,34 @@ export class AgentService {
           }));
 
         this.logger.log(
-          `[${sessionId}] Step ${step + 1}: 思考="${thinking.slice(0, 100)}...", Tool 调用=${toolCalls.length}个 [${toolCalls.map((t) => t.name).join(', ')}]`,
+          `[${sessionId}] ${label} Step ${step + 1}: 思考="${thinking.slice(0, 100)}...", Tool 调用=${toolCalls.length}个 [${toolCalls.map((t) => t.name).join(', ')}]`,
         );
 
-        // 2. 如果 LLM 没有调用任何 Tool 或 finish_reason=stop —— 任务完成
+        // ---- 如果 LLM 没有调用任何 Tool 或 finish_reason=stop —— 任务完成 ----
         if (toolCallsRaw.length === 0 || choice.finish_reason === 'stop') {
+          // 防止"说了要推送但没调工具"的情况：
+          // LLM 有时会在文字中表达推送意图，但因为上下文过长或其他原因
+          // 没有在同一回复中调用推送工具就 stop 了。
+          // 此时注入提醒消息，让 LLM 继续执行推送。
+          if (!digestSent && thinking && this.looksLikePushIntent(thinking)) {
+            this.logger.warn(
+              `[${sessionId}] ${label} Step ${step + 1}: LLM 表达了推送意图但未调用推送工具，注入提醒继续`,
+            );
+            messages.push(assistantMessage);
+            messages.push({
+              role: 'user',
+              content: `你刚才说要发送推送，但没有调用推送工具。请立即调用 ${digestToolName} 工具完成推送。注意：你必须提供 userId 和 contentIds 参数。如果你不记得 contentIds，请先调用 get_recent_contents 获取最近的内容列表。`,
+            });
+            steps.push({
+              step: step + 1,
+              thinking: `[系统提醒] LLM 表达推送意图但未调用工具: "${thinking.slice(0, 200)}"`,
+              toolCalls: [],
+              toolResults: [],
+              durationMs: Date.now() - stepStart,
+            });
+            continue;
+          }
+
           steps.push({
             step: step + 1,
             thinking,
@@ -350,34 +385,27 @@ export class AgentService {
             durationMs: Date.now() - stepStart,
           });
 
-          // 记录日志
           await this.logAgentExecution(userId, sessionId, steps);
-
           this.logger.log(
-            `[${sessionId}] Agent 完成: ${steps.length} 步, ${Date.now() - startTime}ms`,
+            `[${sessionId}] ${label} 完成: ${steps.length} 步, ${Date.now() - startTime}ms`,
           );
 
-          // 如果 Agent 自行结束但未发送推送，触发兜底安全网
+          // 未推送 → 尝试自动推送已分析内容 → 失败则告警
           if (!digestSent) {
-            this.logger.warn(
-              `[${sessionId}] Agent 自行结束但未完成推送，触发兜底安全网`,
-            );
-            const fallbackResult = await this.runFallback(userId, sessionId);
-            return {
+            return this.handleUnsentDigest(
+              userId,
               sessionId,
-              report: `Agent 结束但未发送推送，已触发兜底。${fallbackResult.message}`,
-              stepsUsed: steps.length,
-              totalDurationMs: Date.now() - startTime,
-              isSuccess: false,
-              isFallback: true,
-              digestSent: fallbackResult.success,
-              contentCount: fallbackResult.contentCount,
-            };
+              label,
+              steps,
+              startTime,
+              enableAutoDigest,
+              enableFallbackAlert,
+            );
           }
 
           return {
             sessionId,
-            report: thinking || '任务已完成',
+            report: thinking || defaultReport,
             stepsUsed: steps.length,
             totalDurationMs: Date.now() - startTime,
             isSuccess: true,
@@ -387,10 +415,10 @@ export class AgentService {
           };
         }
 
-        // 3. 把 LLM 的完整响应加入消息历史
+        // ---- 把 LLM 的完整响应加入消息历史 ----
         messages.push(assistantMessage);
 
-        // 4. 执行 LLM 选择的所有 Tool（支持并行）
+        // ---- 执行 LLM 选择的所有 Tool（支持并行） ----
         const toolResults: AgentToolResult[] = [];
         const toolResultMessages: OpenAI.ChatCompletionToolMessageParam[] =
           await Promise.all(
@@ -403,14 +431,12 @@ export class AgentService {
                 );
 
                 // 跟踪推送状态
-                if (tc.name === 'send_daily_digest' && result?.success) {
+                if (tc.name === digestToolName && result?.success) {
                   digestSent = true;
                   contentCount = tc.args?.contentIds?.length || 0;
                 }
 
                 const resultStr = JSON.stringify(result);
-                // 截断过长的结果以避免 token 超限
-                // 使用智能截断：保留完整 JSON 结构摘要而非粗暴截断
                 const truncatedResult =
                   resultStr.length > 8000
                     ? this.smartTruncateToolResult(result, 8000)
@@ -443,7 +469,6 @@ export class AgentService {
                   durationMs: Date.now() - toolStart,
                 });
 
-                // Tool 执行失败 —— 告诉 LLM，让它自己决定怎么处理
                 return {
                   role: 'tool' as const,
                   tool_call_id: tc.id,
@@ -453,7 +478,7 @@ export class AgentService {
             }),
           );
 
-        // 5. 记录这一步
+        // 记录这一步
         steps.push({
           step: step + 1,
           thinking,
@@ -462,40 +487,35 @@ export class AgentService {
           durationMs: Date.now() - stepStart,
         });
 
-        // 6. 把 Tool 执行结果加入消息历史，回到步骤 1
+        // 把 Tool 执行结果加入消息历史，回到步骤 1
         messages.push(...toolResultMessages);
 
-        // 7. Token 管理（当消息过长时截断早期消息）
+        // Token 管理（当消息过长时截断早期消息）
         this.pruneMessagesIfNeeded(messages);
       }
 
-      // 达到 maxSteps 上限
+      // ---- 达到 maxSteps 上限 ----
       const totalDuration = Date.now() - startTime;
       await this.logAgentExecution(userId, sessionId, steps);
-
       this.logger.warn(
-        `[${sessionId}] Agent 达到最大步数限制 (${this.maxSteps})`,
+        `[${sessionId}] ${label} 达到最大步数限制 (${this.maxSteps})`,
       );
 
-      // 如果没有发送推送，触发兜底
       if (!digestSent) {
-        this.logger.warn(`[${sessionId}] Agent 未完成推送，触发兜底安全网`);
-        const fallbackResult = await this.runFallback(userId, sessionId);
-        return {
+        return this.handleUnsentDigest(
+          userId,
           sessionId,
-          report: `Agent 达到最大步数限制，触发兜底推送。${fallbackResult.message}`,
-          stepsUsed: steps.length,
-          totalDurationMs: Date.now() - startTime,
-          isSuccess: false,
-          isFallback: true,
-          digestSent: fallbackResult.success,
-          contentCount: fallbackResult.contentCount,
-        };
+          label,
+          steps,
+          startTime,
+          enableAutoDigest,
+          enableFallbackAlert,
+        );
       }
 
       return {
         sessionId,
-        report: `Agent 在 ${this.maxSteps} 步内完成，已发送推送`,
+        report: `${label} 在 ${this.maxSteps} 步内完成，已发送推送`,
         stepsUsed: steps.length,
         totalDurationMs: totalDuration,
         isSuccess: true,
@@ -506,22 +526,242 @@ export class AgentService {
     } catch (error) {
       const totalDuration = Date.now() - startTime;
       this.logger.error(
-        `[${sessionId}] Agent 执行异常: ${(error as Error).message}`,
+        `[${sessionId}] ${label} 执行异常: ${(error as Error).message}`,
       );
 
-      // 兜底安全网
-      this.logger.warn(`[${sessionId}] 触发兜底安全网`);
-      const fallbackResult = await this.runFallback(userId, sessionId);
+      // 异常兜底：先尝试自动推送，再发告警
+      if (enableAutoDigest) {
+        const autoResult = await this.autoSendDigestIfReady(
+          userId,
+          sessionId,
+        );
+        if (autoResult.success) {
+          return {
+            sessionId,
+            report: `${label} 执行异常: ${(error as Error).message}，但已自动推送 ${autoResult.contentCount} 篇已分析内容。`,
+            stepsUsed: 0,
+            totalDurationMs: totalDuration,
+            isSuccess: true,
+            isFallback: true,
+            digestSent: true,
+            contentCount: autoResult.contentCount,
+          };
+        }
+      }
+
+      if (enableFallbackAlert) {
+        const fallbackResult = await this.runFallback(userId, sessionId);
+        return {
+          sessionId,
+          report: `${label} 执行异常: ${(error as Error).message}。${fallbackResult.message}`,
+          stepsUsed: 0,
+          totalDurationMs: totalDuration,
+          isSuccess: false,
+          isFallback: true,
+          digestSent: fallbackResult.success,
+          contentCount: fallbackResult.contentCount,
+        };
+      }
 
       return {
         sessionId,
-        report: `Agent 执行异常: ${(error as Error).message}。${fallbackResult.message}`,
+        report: `${label} 执行异常: ${(error as Error).message}`,
         stepsUsed: 0,
         totalDurationMs: totalDuration,
+        isSuccess: false,
+        isFallback: false,
+        digestSent: false,
+        contentCount: 0,
+      };
+    }
+  }
+
+  /**
+   * Agent 未发送推送时的统一处理逻辑（自动推送 → 兜底告警）
+   */
+  private async handleUnsentDigest(
+    userId: string,
+    sessionId: string,
+    label: string,
+    steps: AgentStep[],
+    startTime: number,
+    enableAutoDigest: boolean,
+    enableFallbackAlert: boolean,
+  ): Promise<AgentResult> {
+    // 尝试自动推送已分析内容
+    if (enableAutoDigest) {
+      this.logger.warn(
+        `[${sessionId}] ${label} 未完成推送，尝试自动推送已分析内容`,
+      );
+      const autoResult = await this.autoSendDigestIfReady(userId, sessionId);
+      if (autoResult.success) {
+        this.logger.log(
+          `[${sessionId}] 自动推送成功: ${autoResult.contentCount} 篇内容`,
+        );
+        return {
+          sessionId,
+          report: `${label} 结束未调推送工具，已自动推送 ${autoResult.contentCount} 篇已分析内容。`,
+          stepsUsed: steps.length,
+          totalDurationMs: Date.now() - startTime,
+          isSuccess: true,
+          isFallback: true,
+          digestSent: true,
+          contentCount: autoResult.contentCount,
+        };
+      }
+    }
+
+    // 自动推送失败或未启用，走兜底告警
+    if (enableFallbackAlert) {
+      this.logger.warn(`[${sessionId}] 触发兜底安全网`);
+      const fallbackResult = await this.runFallback(userId, sessionId);
+      return {
+        sessionId,
+        report: `${label} 结束但未发送推送，已触发兜底。${fallbackResult.message}`,
+        stepsUsed: steps.length,
+        totalDurationMs: Date.now() - startTime,
         isSuccess: false,
         isFallback: true,
         digestSent: fallbackResult.success,
         contentCount: fallbackResult.contentCount,
+      };
+    }
+
+    // 都不启用，直接返回失败
+    return {
+      sessionId,
+      report: `${label} 结束但未完成推送`,
+      stepsUsed: steps.length,
+      totalDurationMs: Date.now() - startTime,
+      isSuccess: false,
+      isFallback: false,
+      digestSent: false,
+      contentCount: 0,
+    };
+  }
+
+  /**
+   * 执行每日推送任务 - Agent 核心入口
+   */
+  async runDailyDigest(userId: string): Promise<AgentResult> {
+    const user = await this.userService.findById(userId);
+    return this.runAgentLoop({
+      userId,
+      label: 'Agent',
+      systemPrompt: this.buildAgentSystemPrompt(user),
+      userMessage: `执行今日信息采集和推送任务。
+当前时间: ${new Date().toISOString()}
+用户 ID: ${userId}
+用户名: ${user.name}
+你的目标是为用户产出一份高质量的每日精选推送。
+请自主决定执行步骤，合理使用可用工具。
+完成后输出最终的执行报告。`,
+      tools: this.toolRegistry.getToolDefinitions() as OpenAI.ChatCompletionTool[],
+      digestToolName: 'send_daily_digest',
+      defaultReport: '任务已完成',
+      enableAutoDigest: true,
+      enableFallbackAlert: true,
+    });
+  }
+
+  /**
+   * 检测 LLM 输出文本是否包含"发送推送"的意图
+   * 用于防止 LLM 说了要推送但没实际调用推送工具就 stop 的情况
+   */
+  private looksLikePushIntent(text: string): boolean {
+    const pushKeywords = [
+      '发送推送',
+      '发送每日精选',
+      '发送邮件',
+      '推送给用户',
+      '发送 GitHub',
+      'send_daily_digest',
+      'send_github_trending',
+      '现在发送',
+      '开始推送',
+      '执行推送',
+      '进行推送',
+      '完成推送',
+      '调用推送',
+      '下一步.*推送',
+      '接下来.*推送',
+      '发送.*精选',
+      '第.*步.*推送',
+      '第.*步.*发送',
+    ];
+    const lower = text.toLowerCase();
+    return pushKeywords.some((kw) => {
+      if (kw.includes('.*')) {
+        return new RegExp(kw, 'i').test(text);
+      }
+      return lower.includes(kw.toLowerCase());
+    });
+  }
+
+  /**
+   * 自动推送已分析内容 —— 当 Agent 未调用推送工具时的智能兜底
+   *
+   * 逻辑：查找今天已生成 AI 摘要的内容，如果有，直接调用 sendDigest 推送
+   * 这样即使 LLM 忘了调推送工具，用户依然能收到高质量的推送
+   */
+  private async autoSendDigestIfReady(
+    userId: string,
+    sessionId: string,
+  ): Promise<{ success: boolean; contentCount: number; message: string }> {
+    try {
+      this.logger.log(
+        `[${sessionId}] 尝试自动推送: 查找今日已分析内容...`,
+      );
+
+      // 利用 NotificationService 的 sendTodayAnalyzed 逻辑
+      const result =
+        await this.toolRegistry.getNotificationService().sendTodayAnalyzed(userId);
+
+      if (result.success) {
+        this.logger.log(
+          `[${sessionId}] 自动推送成功: ${result.contentCount} 篇内容`,
+        );
+
+        // 记录自动推送日志
+        await this.agentLogRepo.save(
+          this.agentLogRepo.create({
+            userId,
+            sessionId,
+            action: 'auto_digest_sent',
+            input: { reason: 'agent_did_not_call_push_tool' },
+            output: {
+              contentCount: result.contentCount,
+              digestId: result.digestId,
+            },
+            reasoning:
+              '自动推送: Agent 完成分析但未调用推送工具，系统自动推送已分析内容',
+            durationMs: 0,
+          }),
+        );
+
+        return {
+          success: true,
+          contentCount: result.contentCount,
+          message: `自动推送了 ${result.contentCount} 篇已分析内容`,
+        };
+      }
+
+      this.logger.warn(
+        `[${sessionId}] 自动推送无内容: ${result.message}`,
+      );
+      return {
+        success: false,
+        contentCount: 0,
+        message: result.message || '今日暂无已分析内容可推送',
+      };
+    } catch (error) {
+      this.logger.error(
+        `[${sessionId}] 自动推送异常: ${(error as Error).message}`,
+      );
+      return {
+        success: false,
+        contentCount: 0,
+        message: `自动推送失败: ${(error as Error).message}`,
       };
     }
   }
@@ -693,240 +933,45 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
    * 只提供 GitHub 相关工具，避免 LLM 分心去处理公众号等其他来源
    */
   async runGithubTrending(userId: string): Promise<AgentResult> {
-    const sessionId = uuidv4();
-    const startTime = Date.now();
-    this.logger.log(
-      `[${sessionId}] GitHub Agent 开始执行, userId=${userId}`,
+    const user = await this.userService.findById(userId);
+    const allTools = this.toolRegistry.getToolDefinitions();
+
+    // 只保留 GitHub 相关工具
+    const githubToolNames = new Set([
+      'read_user_profile',
+      'get_user_sources',
+      'query_memory',
+      'collect_github',
+      'filter_and_dedup',
+      'score_contents',
+      'generate_summary',
+      'batch_generate_summaries',
+      'get_recent_contents',
+      'send_github_trending',
+      'store_memory',
+      'analyze_source_quality',
+    ]);
+    const githubTools = allTools.filter((t) =>
+      githubToolNames.has(t.function?.name || ''),
     );
 
-    try {
-      const user = await this.userService.findById(userId);
-      const tools = this.toolRegistry.getToolDefinitions();
-
-      // 只保留 GitHub 相关工具
-      const githubToolNames = new Set([
-        'read_user_profile',
-        'get_user_sources',
-        'query_memory',
-        'collect_github',
-        'filter_and_dedup',
-        'score_contents',
-        'generate_summary',
-        'batch_generate_summaries',
-        'get_recent_contents',
-        'send_github_trending',
-        'store_memory',
-        'analyze_source_quality',
-      ]);
-      const githubTools = tools.filter((t) =>
-        githubToolNames.has(t.function?.name || ''),
-      );
-
-      const systemPrompt = this.buildGithubAgentSystemPrompt(user);
-      const messages: OpenAI.ChatCompletionMessageParam[] = [
-        { role: 'system', content: systemPrompt },
-        {
-          role: 'user',
-          content: `执行 GitHub 热点采集与推送任务。
+    return this.runAgentLoop({
+      userId,
+      label: 'GitHub Agent',
+      systemPrompt: this.buildGithubAgentSystemPrompt(user),
+      userMessage: `执行 GitHub 热点采集与推送任务。
 当前时间: ${new Date().toISOString()}
 用户 ID: ${userId}
 用户名: ${user.name}
 你的目标是采集 GitHub 热门仓库，进行 AI 分析，并发送 GitHub 专属邮件推送。
 请自主决定执行步骤，合理使用可用工具。
 完成后输出最终的执行报告。`,
-        },
-      ];
-
-      const steps: AgentStep[] = [];
-      let digestSent = false;
-      let contentCount = 0;
-
-      // ========== Agent Loop ==========
-      for (let step = 0; step < this.maxSteps; step++) {
-        const stepStart = Date.now();
-
-        this.logger.log(`[${sessionId}] GitHub Step ${step + 1}: 调用 LLM...`);
-
-        let response: OpenAI.ChatCompletion;
-        try {
-          response = await this.callLLMWithRetry(
-            sessionId,
-            messages,
-            githubTools as OpenAI.ChatCompletionTool[],
-          );
-        } catch (error) {
-          this.logger.error(
-            `[${sessionId}] LLM 调用最终失败: ${(error as Error).message}`,
-          );
-          break;
-        }
-
-        const choice = response.choices[0];
-        if (!choice) {
-          this.logger.error(`[${sessionId}] LLM 返回空响应`);
-          break;
-        }
-
-        const assistantMessage = choice.message;
-        const thinking = assistantMessage.content || '';
-        const toolCallsRaw = assistantMessage.tool_calls || [];
-
-        const toolCalls: AgentToolCall[] = toolCallsRaw
-          .filter(
-            (
-              tc,
-            ): tc is OpenAI.ChatCompletionMessageToolCall & {
-              type: 'function';
-            } => tc.type === 'function',
-          )
-          .map((tc) => ({
-            id: tc.id,
-            name: tc.function.name,
-            args: JSON.parse(tc.function.arguments || '{}'),
-          }));
-
-        this.logger.log(
-          `[${sessionId}] GitHub Step ${step + 1}: 思考="${thinking.slice(0, 100)}...", Tool 调用=${toolCalls.length}个 [${toolCalls.map((t) => t.name).join(', ')}]`,
-        );
-
-        // 如果没有工具调用或 stop — 任务完成
-        if (toolCallsRaw.length === 0 || choice.finish_reason === 'stop') {
-          steps.push({
-            step: step + 1,
-            thinking,
-            toolCalls: [],
-            toolResults: [],
-            durationMs: Date.now() - stepStart,
-          });
-
-          await this.logAgentExecution(userId, sessionId, steps);
-
-          this.logger.log(
-            `[${sessionId}] GitHub Agent 完成: ${steps.length} 步, ${Date.now() - startTime}ms`,
-          );
-
-          return {
-            sessionId,
-            report: thinking || 'GitHub 热点任务已完成',
-            stepsUsed: steps.length,
-            totalDurationMs: Date.now() - startTime,
-            isSuccess: digestSent,
-            isFallback: false,
-            digestSent,
-            contentCount,
-          };
-        }
-
-        // 把 LLM 响应加入消息历史
-        messages.push(assistantMessage);
-
-        // 执行工具
-        const toolResults: AgentToolResult[] = [];
-        const toolResultMessages: OpenAI.ChatCompletionToolMessageParam[] =
-          await Promise.all(
-            toolCalls.map(async (tc) => {
-              const toolStart = Date.now();
-              try {
-                const result = await this.toolRegistry.executeTool(
-                  tc.name,
-                  tc.args,
-                );
-
-                // 跟踪推送状态
-                if (tc.name === 'send_github_trending' && result?.success) {
-                  digestSent = true;
-                  contentCount = tc.args?.contentIds?.length || 0;
-                }
-
-                const resultStr = JSON.stringify(result);
-                const truncatedResult =
-                  resultStr.length > 8000
-                    ? this.smartTruncateToolResult(result, 8000)
-                    : resultStr;
-
-                toolResults.push({
-                  toolUseId: tc.id,
-                  toolName: tc.name,
-                  result: truncatedResult,
-                  isError: false,
-                  durationMs: Date.now() - toolStart,
-                });
-
-                return {
-                  role: 'tool' as const,
-                  tool_call_id: tc.id,
-                  content: truncatedResult,
-                };
-              } catch (error) {
-                const errorMsg = `Tool 执行失败: ${(error as Error).message}`;
-                this.logger.error(
-                  `[${sessionId}] ${tc.name} 执行失败: ${(error as Error).message}`,
-                );
-
-                toolResults.push({
-                  toolUseId: tc.id,
-                  toolName: tc.name,
-                  result: errorMsg,
-                  isError: true,
-                  durationMs: Date.now() - toolStart,
-                });
-
-                return {
-                  role: 'tool' as const,
-                  tool_call_id: tc.id,
-                  content: errorMsg,
-                };
-              }
-            }),
-          );
-
-        steps.push({
-          step: step + 1,
-          thinking,
-          toolCalls,
-          toolResults,
-          durationMs: Date.now() - stepStart,
-        });
-
-        messages.push(...toolResultMessages);
-        this.pruneMessagesIfNeeded(messages);
-      }
-
-      // 达到 maxSteps 上限
-      const totalDuration = Date.now() - startTime;
-      await this.logAgentExecution(userId, sessionId, steps);
-
-      this.logger.warn(
-        `[${sessionId}] GitHub Agent 达到最大步数限制 (${this.maxSteps})`,
-      );
-
-      return {
-        sessionId,
-        report: `GitHub Agent 达到最大步数限制 (${this.maxSteps})，${digestSent ? '已发送推送' : '未能完成推送'}`,
-        stepsUsed: steps.length,
-        totalDurationMs: totalDuration,
-        isSuccess: digestSent,
-        isFallback: false,
-        digestSent,
-        contentCount,
-      };
-    } catch (error) {
-      const totalDuration = Date.now() - startTime;
-      this.logger.error(
-        `[${sessionId}] GitHub Agent 执行异常: ${(error as Error).message}`,
-      );
-
-      return {
-        sessionId,
-        report: `GitHub Agent 执行异常: ${(error as Error).message}`,
-        stepsUsed: 0,
-        totalDurationMs: totalDuration,
-        isSuccess: false,
-        isFallback: false,
-        digestSent: false,
-        contentCount: 0,
-      };
-    }
+      tools: githubTools as OpenAI.ChatCompletionTool[],
+      digestToolName: 'send_github_trending',
+      defaultReport: 'GitHub 热点任务已完成',
+      enableAutoDigest: false,
+      enableFallbackAlert: false,
+    });
   }
 
   /**
@@ -1149,25 +1194,13 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
     userId: string,
     options?: { daysWindow?: number },
   ): Promise<AgentResult> {
-    const sessionId = uuidv4();
-    const startTime = Date.now();
     const daysWindow = options?.daysWindow ?? 1;
-
-    this.logger.log(
-      `[${sessionId}] Agent 分析模式启动, userId=${userId}, daysWindow=${daysWindow}`,
-    );
-
-    try {
-      const user = await this.userService.findById(userId);
-      const tools = this.toolRegistry.getToolDefinitions();
-
-      // 构建分析模式专用的消息
-      const systemPrompt = this.buildAnalysisSystemPrompt(user);
-      const messages: OpenAI.ChatCompletionMessageParam[] = [
-        { role: 'system', content: systemPrompt },
-        {
-          role: 'user',
-          content: `执行 AI 分析任务（跳过采集，仅分析数据库中已有的文章）。
+    const user = await this.userService.findById(userId);
+    return this.runAgentLoop({
+      userId,
+      label: 'Agent 分析',
+      systemPrompt: this.buildAnalysisSystemPrompt(user),
+      userMessage: `执行 AI 分析任务（跳过采集，仅分析数据库中已有的文章）。
 当前时间: ${new Date().toISOString()}
 用户 ID: ${userId}
 用户名: ${user.name}
@@ -1175,215 +1208,12 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
 你的目标是对数据库中已有的文章进行高质量的 AI 分析、评分和推送。
 请自主决定执行步骤，合理使用可用工具。
 完成后输出最终的执行报告。`,
-        },
-      ];
-
-      const steps: AgentStep[] = [];
-      let digestSent = false;
-      let contentCount = 0;
-
-      // ========== Agent Loop ==========
-      for (let step = 0; step < this.maxSteps; step++) {
-        const stepStart = Date.now();
-
-        this.logger.log(`[${sessionId}] Step ${step + 1}: 调用 LLM...`);
-
-        let response: OpenAI.ChatCompletion;
-        try {
-          response = await this.callLLMWithRetry(
-            sessionId,
-            messages,
-            tools as OpenAI.ChatCompletionTool[],
-          );
-        } catch (error) {
-          this.logger.error(
-            `[${sessionId}] LLM 调用最终失败: ${(error as Error).message}`,
-          );
-          break;
-        }
-
-        const choice = response.choices[0];
-        if (!choice) {
-          this.logger.error(`[${sessionId}] LLM 返回空响应`);
-          break;
-        }
-
-        const assistantMessage = choice.message;
-        const thinking = assistantMessage.content || '';
-        const toolCallsRaw = assistantMessage.tool_calls || [];
-
-        const toolCalls: AgentToolCall[] = toolCallsRaw
-          .filter(
-            (
-              tc,
-            ): tc is OpenAI.ChatCompletionMessageToolCall & {
-              type: 'function';
-            } => tc.type === 'function',
-          )
-          .map((tc) => ({
-            id: tc.id,
-            name: tc.function.name,
-            args: JSON.parse(tc.function.arguments || '{}'),
-          }));
-
-        this.logger.log(
-          `[${sessionId}] Step ${step + 1}: 思考="${thinking.slice(0, 100)}...", Tool 调用=${toolCalls.length}个 [${toolCalls.map((t) => t.name).join(', ')}]`,
-        );
-
-        // 如果没有工具调用或 stop — 任务完成
-        if (toolCallsRaw.length === 0 || choice.finish_reason === 'stop') {
-          steps.push({
-            step: step + 1,
-            thinking,
-            toolCalls: [],
-            toolResults: [],
-            durationMs: Date.now() - stepStart,
-          });
-
-          const totalDuration = Date.now() - startTime;
-          await this.logAgentExecution(userId, sessionId, steps);
-
-          this.logger.log(
-            `[${sessionId}] Agent 分析完成: ${steps.length} 步, ${totalDuration}ms`,
-          );
-
-          return {
-            sessionId,
-            report: thinking || '分析任务已完成',
-            stepsUsed: steps.length,
-            totalDurationMs: totalDuration,
-            isSuccess: true,
-            isFallback: false,
-            digestSent,
-            contentCount,
-          };
-        }
-
-        // 把 LLM 响应加入消息历史
-        messages.push(assistantMessage);
-
-        // 执行工具
-        const toolResults: AgentToolResult[] = [];
-        const toolResultMessages: OpenAI.ChatCompletionToolMessageParam[] =
-          await Promise.all(
-            toolCalls.map(async (tc) => {
-              const toolStart = Date.now();
-              try {
-                const result = await this.toolRegistry.executeTool(
-                  tc.name,
-                  tc.args,
-                );
-
-                if (tc.name === 'send_daily_digest' && result?.success) {
-                  digestSent = true;
-                  contentCount = tc.args?.contentIds?.length || 0;
-                }
-
-                const resultStr = JSON.stringify(result);
-                const truncatedResult =
-                  resultStr.length > 8000
-                    ? this.smartTruncateToolResult(result, 8000)
-                    : resultStr;
-
-                toolResults.push({
-                  toolUseId: tc.id,
-                  toolName: tc.name,
-                  result: truncatedResult,
-                  isError: false,
-                  durationMs: Date.now() - toolStart,
-                });
-
-                return {
-                  role: 'tool' as const,
-                  tool_call_id: tc.id,
-                  content: truncatedResult,
-                };
-              } catch (error) {
-                const errorMsg = `Tool 执行失败: ${(error as Error).message}`;
-                this.logger.error(
-                  `[${sessionId}] ${tc.name} 执行失败: ${(error as Error).message}`,
-                );
-
-                toolResults.push({
-                  toolUseId: tc.id,
-                  toolName: tc.name,
-                  result: errorMsg,
-                  isError: true,
-                  durationMs: Date.now() - toolStart,
-                });
-
-                return {
-                  role: 'tool' as const,
-                  tool_call_id: tc.id,
-                  content: errorMsg,
-                };
-              }
-            }),
-          );
-
-        steps.push({
-          step: step + 1,
-          thinking,
-          toolCalls,
-          toolResults,
-          durationMs: Date.now() - stepStart,
-        });
-
-        messages.push(...toolResultMessages);
-        this.pruneMessagesIfNeeded(messages);
-      }
-
-      // 达到上限
-      const totalDuration = Date.now() - startTime;
-      await this.logAgentExecution(userId, sessionId, steps);
-
-      this.logger.warn(
-        `[${sessionId}] Agent 分析模式达到最大步数限制 (${this.maxSteps})`,
-      );
-
-      // 如果步数耗尽但未发送推送，触发兜底
-      if (!digestSent) {
-        this.logger.warn(
-          `[${sessionId}] Agent 分析模式未完成推送，触发兜底安全网`,
-        );
-        const fallbackResult = await this.runFallback(userId, sessionId);
-        return {
-          sessionId,
-          report: `Agent 分析达到最大步数限制，触发兜底推送。${fallbackResult.message}`,
-          stepsUsed: steps.length,
-          totalDurationMs: Date.now() - startTime,
-          isSuccess: false,
-          isFallback: true,
-          digestSent: fallbackResult.success,
-          contentCount: fallbackResult.contentCount,
-        };
-      }
-
-      return {
-        sessionId,
-        report: `Agent 分析在 ${this.maxSteps} 步内完成，已发送推送`,
-        stepsUsed: steps.length,
-        totalDurationMs: totalDuration,
-        isSuccess: true,
-        isFallback: false,
-        digestSent,
-        contentCount,
-      };
-    } catch (error) {
-      this.logger.error(
-        `[${sessionId}] Agent 分析异常: ${(error as Error).message}`,
-      );
-      return {
-        sessionId,
-        report: `Agent 分析失败: ${(error as Error).message}`,
-        stepsUsed: 0,
-        totalDurationMs: Date.now() - startTime,
-        isSuccess: false,
-        isFallback: false,
-        digestSent: false,
-        contentCount: 0,
-      };
-    }
+      tools: this.toolRegistry.getToolDefinitions() as OpenAI.ChatCompletionTool[],
+      digestToolName: 'send_daily_digest',
+      defaultReport: '分析任务已完成',
+      enableAutoDigest: true,
+      enableFallbackAlert: true,
+    });
   }
 
   /**

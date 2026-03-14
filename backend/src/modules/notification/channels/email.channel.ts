@@ -95,7 +95,7 @@ export class EmailChannel {
   }
 
   /**
-   * 发送每日精选邮件
+   * 发送每日精选邮件（纯公众号文章）
    */
   async sendDigestEmail(
     to: string,
