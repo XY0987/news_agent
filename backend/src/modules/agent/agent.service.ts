@@ -627,6 +627,7 @@ export class AgentService {
 
 ### 行动类工具
 - collect_wechat: 从微信公众号采集最新文章
+- collect_github: 从 GitHub 热点数据源采集热门仓库（支持 Trending、Most Popular、Topics/frontend）
 - filter_and_dedup: 对内容进行去重和过滤
 - score_contents: 对内容进行初步规则评分（快速预筛，非最终评分）
 - generate_summary: 为单篇内容生成 AI 摘要+精准 AI 评分（会覆盖规则评分）
@@ -682,6 +683,306 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
   }
 
   /**
+   * GitHub 热点 Agent — 专注 GitHub 数据源的完整 Agent Loop
+   *
+   * LLM 自主决策：采集 GitHub 热点 → 过滤去重 → AI 分析 → 发送 GitHub 专属邮件
+   * 只提供 GitHub 相关工具，避免 LLM 分心去处理公众号等其他来源
+   */
+  async runGithubTrending(userId: string): Promise<AgentResult> {
+    const sessionId = uuidv4();
+    const startTime = Date.now();
+    this.logger.log(
+      `[${sessionId}] GitHub Agent 开始执行, userId=${userId}`,
+    );
+
+    try {
+      const user = await this.userService.findById(userId);
+      const tools = this.toolRegistry.getToolDefinitions();
+
+      // 只保留 GitHub 相关工具
+      const githubToolNames = new Set([
+        'read_user_profile',
+        'get_user_sources',
+        'query_memory',
+        'collect_github',
+        'filter_and_dedup',
+        'score_contents',
+        'generate_summary',
+        'batch_generate_summaries',
+        'get_recent_contents',
+        'send_github_trending',
+        'store_memory',
+        'analyze_source_quality',
+      ]);
+      const githubTools = tools.filter((t) =>
+        githubToolNames.has(t.function?.name || ''),
+      );
+
+      const systemPrompt = this.buildGithubAgentSystemPrompt(user);
+      const messages: OpenAI.ChatCompletionMessageParam[] = [
+        { role: 'system', content: systemPrompt },
+        {
+          role: 'user',
+          content: `执行 GitHub 热点采集与推送任务。
+当前时间: ${new Date().toISOString()}
+用户 ID: ${userId}
+用户名: ${user.name}
+你的目标是采集 GitHub 热门仓库，进行 AI 分析，并发送 GitHub 专属邮件推送。
+请自主决定执行步骤，合理使用可用工具。
+完成后输出最终的执行报告。`,
+        },
+      ];
+
+      const steps: AgentStep[] = [];
+      let digestSent = false;
+      let contentCount = 0;
+
+      // ========== Agent Loop ==========
+      for (let step = 0; step < this.maxSteps; step++) {
+        const stepStart = Date.now();
+
+        this.logger.log(`[${sessionId}] GitHub Step ${step + 1}: 调用 LLM...`);
+
+        let response: OpenAI.ChatCompletion;
+        try {
+          response = await this.callLLMWithRetry(
+            sessionId,
+            messages,
+            githubTools as OpenAI.ChatCompletionTool[],
+          );
+        } catch (error) {
+          this.logger.error(
+            `[${sessionId}] LLM 调用最终失败: ${(error as Error).message}`,
+          );
+          break;
+        }
+
+        const choice = response.choices[0];
+        if (!choice) {
+          this.logger.error(`[${sessionId}] LLM 返回空响应`);
+          break;
+        }
+
+        const assistantMessage = choice.message;
+        const thinking = assistantMessage.content || '';
+        const toolCallsRaw = assistantMessage.tool_calls || [];
+
+        const toolCalls: AgentToolCall[] = toolCallsRaw
+          .filter(
+            (
+              tc,
+            ): tc is OpenAI.ChatCompletionMessageToolCall & {
+              type: 'function';
+            } => tc.type === 'function',
+          )
+          .map((tc) => ({
+            id: tc.id,
+            name: tc.function.name,
+            args: JSON.parse(tc.function.arguments || '{}'),
+          }));
+
+        this.logger.log(
+          `[${sessionId}] GitHub Step ${step + 1}: 思考="${thinking.slice(0, 100)}...", Tool 调用=${toolCalls.length}个 [${toolCalls.map((t) => t.name).join(', ')}]`,
+        );
+
+        // 如果没有工具调用或 stop — 任务完成
+        if (toolCallsRaw.length === 0 || choice.finish_reason === 'stop') {
+          steps.push({
+            step: step + 1,
+            thinking,
+            toolCalls: [],
+            toolResults: [],
+            durationMs: Date.now() - stepStart,
+          });
+
+          await this.logAgentExecution(userId, sessionId, steps);
+
+          this.logger.log(
+            `[${sessionId}] GitHub Agent 完成: ${steps.length} 步, ${Date.now() - startTime}ms`,
+          );
+
+          return {
+            sessionId,
+            report: thinking || 'GitHub 热点任务已完成',
+            stepsUsed: steps.length,
+            totalDurationMs: Date.now() - startTime,
+            isSuccess: digestSent,
+            isFallback: false,
+            digestSent,
+            contentCount,
+          };
+        }
+
+        // 把 LLM 响应加入消息历史
+        messages.push(assistantMessage);
+
+        // 执行工具
+        const toolResults: AgentToolResult[] = [];
+        const toolResultMessages: OpenAI.ChatCompletionToolMessageParam[] =
+          await Promise.all(
+            toolCalls.map(async (tc) => {
+              const toolStart = Date.now();
+              try {
+                const result = await this.toolRegistry.executeTool(
+                  tc.name,
+                  tc.args,
+                );
+
+                // 跟踪推送状态
+                if (tc.name === 'send_github_trending' && result?.success) {
+                  digestSent = true;
+                  contentCount = tc.args?.contentIds?.length || 0;
+                }
+
+                const resultStr = JSON.stringify(result);
+                const truncatedResult =
+                  resultStr.length > 8000
+                    ? this.smartTruncateToolResult(result, 8000)
+                    : resultStr;
+
+                toolResults.push({
+                  toolUseId: tc.id,
+                  toolName: tc.name,
+                  result: truncatedResult,
+                  isError: false,
+                  durationMs: Date.now() - toolStart,
+                });
+
+                return {
+                  role: 'tool' as const,
+                  tool_call_id: tc.id,
+                  content: truncatedResult,
+                };
+              } catch (error) {
+                const errorMsg = `Tool 执行失败: ${(error as Error).message}`;
+                this.logger.error(
+                  `[${sessionId}] ${tc.name} 执行失败: ${(error as Error).message}`,
+                );
+
+                toolResults.push({
+                  toolUseId: tc.id,
+                  toolName: tc.name,
+                  result: errorMsg,
+                  isError: true,
+                  durationMs: Date.now() - toolStart,
+                });
+
+                return {
+                  role: 'tool' as const,
+                  tool_call_id: tc.id,
+                  content: errorMsg,
+                };
+              }
+            }),
+          );
+
+        steps.push({
+          step: step + 1,
+          thinking,
+          toolCalls,
+          toolResults,
+          durationMs: Date.now() - stepStart,
+        });
+
+        messages.push(...toolResultMessages);
+        this.pruneMessagesIfNeeded(messages);
+      }
+
+      // 达到 maxSteps 上限
+      const totalDuration = Date.now() - startTime;
+      await this.logAgentExecution(userId, sessionId, steps);
+
+      this.logger.warn(
+        `[${sessionId}] GitHub Agent 达到最大步数限制 (${this.maxSteps})`,
+      );
+
+      return {
+        sessionId,
+        report: `GitHub Agent 达到最大步数限制 (${this.maxSteps})，${digestSent ? '已发送推送' : '未能完成推送'}`,
+        stepsUsed: steps.length,
+        totalDurationMs: totalDuration,
+        isSuccess: digestSent,
+        isFallback: false,
+        digestSent,
+        contentCount,
+      };
+    } catch (error) {
+      const totalDuration = Date.now() - startTime;
+      this.logger.error(
+        `[${sessionId}] GitHub Agent 执行异常: ${(error as Error).message}`,
+      );
+
+      return {
+        sessionId,
+        report: `GitHub Agent 执行异常: ${(error as Error).message}`,
+        stepsUsed: 0,
+        totalDurationMs: totalDuration,
+        isSuccess: false,
+        isFallback: false,
+        digestSent: false,
+        contentCount: 0,
+      };
+    }
+  }
+
+  /**
+   * GitHub Agent 专用 System Prompt
+   */
+  private buildGithubAgentSystemPrompt(user: any): string {
+    return `你是一个专注于 GitHub 技术趋势的智能 Agent。你的任务是为用户采集 GitHub 热门仓库、进行 AI 分析，并通过 GitHub 专属邮件推送。
+
+## 你的能力（Tools）
+
+### 感知类工具
+- read_user_profile: 读取用户画像和偏好设置
+- get_user_sources: 获取用户的数据源列表（筛选 type=github）
+- query_memory: 查询历史决策经验
+
+### 行动类工具
+- collect_github: 从 GitHub 热点数据源采集最新热门仓库（Trending、Most Popular、Topics）
+- filter_and_dedup: 对采集到的内容进行去重和基础过滤
+- score_contents: 规则预评分（可选，AI 摘要会产出更精准的评分）
+- generate_summary: 为单个仓库生成 AI 摘要+评分
+- batch_generate_summaries: 批量生成 AI 摘要+评分（建议每批不超过 10 条）
+- get_recent_contents: 获取最近采集的内容
+
+### 推送类工具
+- send_github_trending: 发送 GitHub 热点趋势专属邮件（使用 GitHub 模板，展示 Star 数、新增 Star 等）
+
+### 记忆类工具
+- store_memory: 存储决策经验
+- analyze_source_quality: 分析来源质量
+
+## 推荐工作流程
+1. 读取用户画像（了解技术兴趣偏好）
+2. 获取用户的 GitHub 数据源列表
+3. 采集 GitHub 热点仓库（collect_github）
+4. 过滤去重（filter_and_dedup，注意设置 sourceType='github' 或合理的 daysWindow）
+5. 对过滤后的仓库分批生成 AI 摘要+评分（batch_generate_summaries，每批最多 10 条）
+6. 发送 GitHub 热点邮件（send_github_trending，传入所有 successIds）
+7. 记录本次决策经验（可选）
+
+## 用户画像
+${JSON.stringify(user.profile || {}, null, 2)}
+
+## 用户偏好
+${JSON.stringify(user.preferences || {}, null, 2)}
+
+## 决策约束
+- **只关注 GitHub 数据源**，不要采集或处理微信公众号等其他来源
+- 必须推送所有已生成摘要的仓库（邮件会自动按 AI 评分分区展示）
+- 摘要需分批处理：每批不超过 10 条
+- **关键**：每次 batch_generate_summaries 返回的 successIds 都要记录下来，最后传给 send_github_trending 时要传入**全部 successIds 的合集**
+- 每次任务执行结束前，务必调用 send_github_trending 发送推送
+- 如果没有 GitHub 数据源或采集无结果，直接报告并结束
+
+## 重要提醒
+- 用户 ID 为: ${user.id}
+- 所有需要 userId 参数的 Tool 调用，请使用上面的用户 ID
+- 任务完成后请输出执行报告，包括采集数量、过滤数量、推送数量等关键信息`;
+  }
+
+  /**
    * 分析模式专用 System Prompt — 跳过采集，直接分析已有文章
    */
   private buildAnalysisSystemPrompt(user: any): string {
@@ -700,6 +1001,7 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
 
 ### 行动类工具
 - filter_and_dedup: 对内容进行去重和过滤（从数据库获取指定时间窗口内的文章）
+- collect_github: 从 GitHub 热点数据源采集热门仓库（即使在分析模式，也可按需采集 GitHub 最新热点）
 - score_contents: 对内容进行初步规则评分（快速预筛，非最终评分）
 - generate_summary: 为单篇内容生成 AI 摘要和精准评分（LLM 调用，会产出最终的 AI 评分并覆盖规则评分）
 - batch_generate_summaries: 批量生成 AI 摘要和评分（建议每批不超过 10 条，内部并发控制为 3）

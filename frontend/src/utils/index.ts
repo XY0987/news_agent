@@ -65,6 +65,7 @@ export function getSourceTypeName(type: string): string {
   const map: Record<string, string> = {
     wechat: "微信公众号",
     rss: "RSS 订阅",
+    github: "GitHub",
     website: "网站",
     twitter: "Twitter",
   };

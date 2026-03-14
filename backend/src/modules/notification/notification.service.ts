@@ -264,6 +264,135 @@ export class NotificationService {
   }
 
   /**
+   * 发送 GitHub 热点趋势邮件（独立于每日精选，单独推送）
+   */
+  async sendGithubTrending(params: {
+    userId: string;
+    contentIds: string[];
+    agentNote?: string;
+  }): Promise<{ success: boolean; message: string; digestId: string }> {
+    const { userId, contentIds, agentNote } = params;
+
+    const user = await this.userRepo.findOneBy({ id: userId });
+    if (!user) throw new Error(`用户 ${userId} 不存在`);
+
+    if (!contentIds || contentIds.length === 0) {
+      throw new Error('contentIds 不能为空');
+    }
+
+    const contents = await this.contentRepo.findBy({ id: In(contentIds) });
+
+    // 获取评分信息
+    const scores = await this.scoreRepo.find({
+      where: { userId, contentId: In(contentIds) },
+    });
+    const scoreMap = new Map(scores.map((s) => [s.contentId, s]));
+
+    // 获取摘要信息
+    const interactions = await this.interactionRepo.find({
+      where: { userId, contentId: In(contentIds) },
+    });
+    const interactionMap = new Map(interactions.map((i) => [i.contentId, i]));
+
+    // 保存推送记录（type 标记为 github_trending）
+    const digest = this.digestRepo.create({
+      userId,
+      type: 'daily',
+      contentIds,
+      renderedContent: `# GitHub 热点趋势\n\n${contents.map((c) => `- ${c.title}`).join('\n')}`,
+    });
+    const savedDigest = await this.digestRepo.save(digest);
+
+    // 发送 GitHub 专属邮件
+    const email = user.email || (user.notificationSettings as any)?.email;
+    if (!email) {
+      return {
+        success: false,
+        message: '用户未配置邮箱地址',
+        digestId: savedDigest.id,
+      };
+    }
+
+    if (!this.emailChannel.isAvailable()) {
+      return {
+        success: false,
+        message: 'SMTP 未配置，邮件通道不可用',
+        digestId: savedDigest.id,
+      };
+    }
+
+    const date = new Date().toLocaleDateString('zh-CN', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      weekday: 'long',
+    });
+
+    // 组装 GitHub 仓库数据
+    const items = contents.map((content, index) => {
+      const score = scoreMap.get(content.id);
+      const interaction = interactionMap.get(content.id);
+      const meta = (content.metadata || {}) as Record<string, any>;
+
+      return {
+        index: index + 1,
+        title: content.title || '无标题',
+        fullName: (meta.fullName as string) || content.author || '',
+        description: (meta.description as string) || '',
+        language: (meta.language as string) || '',
+        stars: (meta.stars as number) || 0,
+        starsToday: (meta.starsToday as number) || 0,
+        forks: (meta.forks as number) || 0,
+        trendSource: (meta.trendSource as string) || '',
+        topics: (meta.topics as string[]) || [],
+        url: content.url || '#',
+        finalScore: score?.finalScore || 0,
+        breakdown: (score?.scoreBreakdown || {}) as Record<string, number>,
+        summary: interaction?.summary || '',
+        actionSuggestions: ((interaction?.suggestions as any) || []) as {
+          type: string;
+          suggestion: string;
+        }[],
+      };
+    });
+
+    // 按 star 数排序
+    items.sort((a, b) => b.stars - a.stars);
+
+    const emailResult = await this.emailChannel.sendGithubTrendingEmail(
+      email,
+      { date, agentNote, items },
+    );
+
+    if (emailResult.success) {
+      savedDigest.sentAt = new Date();
+      await this.digestRepo.save(savedDigest);
+
+      // 更新交互记录的 notifiedAt
+      for (const contentId of contentIds) {
+        let interaction = interactionMap.get(contentId);
+        if (!interaction) {
+          interaction = this.interactionRepo.create({ userId, contentId });
+        }
+        interaction.notifiedAt = new Date();
+        await this.interactionRepo.save(interaction);
+      }
+    }
+
+    this.logger.log(
+      `GitHub 热点推送: userId=${userId}, 仓库 ${items.length} 个, digestId=${savedDigest.id}, 邮件=${emailResult.success ? '✓' : '✗'}`,
+    );
+
+    return {
+      success: emailResult.success,
+      message: emailResult.success
+        ? `GitHub 热点推送成功，包含 ${items.length} 个热门仓库`
+        : `推送已保存但发送失败: ${emailResult.error || '未知错误'}`,
+      digestId: savedDigest.id,
+    };
+  }
+
+  /**
    * 渲染推送内容（Markdown 格式，存入 DB）
    */
   private renderDigest(

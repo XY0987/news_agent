@@ -70,6 +70,36 @@ export class AgentController {
   }
 
   /**
+   * POST /api/agent/run-github
+   * 手动触发 GitHub 热点 Agent（LLM 自主决策：采集 + 分析 + 推送）
+   */
+  @Post('run-github')
+  async runGithubAgent(@Body() body: RunAgentDto) {
+    if (!body.userId) {
+      throw new HttpException('userId is required', HttpStatus.BAD_REQUEST);
+    }
+
+    this.logger.log(`手动触发 GitHub Agent: userId=${body.userId}`);
+
+    try {
+      const result = await this.agentService.runGithubTrending(body.userId);
+      return {
+        success: true,
+        data: result,
+      };
+    } catch (error) {
+      this.logger.error(`GitHub Agent 执行失败: ${(error as Error).message}`);
+      throw new HttpException(
+        {
+          success: false,
+          message: `GitHub Agent 执行失败: ${(error as Error).message}`,
+        },
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
    * POST /api/agent/analyze
    * 仅执行 AI 分析（跳过采集），对已有文章进行评分+摘要+推送
    */

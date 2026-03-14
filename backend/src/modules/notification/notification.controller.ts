@@ -73,4 +73,13 @@ export class NotificationController {
     );
     return ApiResponse.ok(result);
   }
+
+  /**
+   * 手动触发 GitHub 热点推送
+   */
+  @Post('send-github-trending')
+  async sendGithubTrending(@Body() body: SendDigestDto) {
+    const result = await this.notificationService.sendGithubTrending(body);
+    return ApiResponse.ok(result);
+  }
 }

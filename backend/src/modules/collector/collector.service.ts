@@ -4,6 +4,7 @@ import { Repository, In } from 'typeorm';
 import { ContentEntity } from '../../common/database/entities/content.entity.js';
 import { SourceEntity } from '../../common/database/entities/source.entity.js';
 import { WechatCollector } from './collectors/wechat.collector.js';
+import { GithubCollector } from './collectors/github.collector.js';
 import type { RawContent } from './base.collector.js';
 
 export interface CollectResult {
@@ -24,6 +25,7 @@ export class CollectorService {
     @InjectRepository(SourceEntity)
     private readonly sourceRepo: Repository<SourceEntity>,
     private readonly wechatCollector: WechatCollector,
+    private readonly githubCollector: GithubCollector,
   ) {}
 
   /**
@@ -93,6 +95,37 @@ export class CollectorService {
   }
 
   /**
+   * 仅采集用户的 GitHub 数据源（用于独立的 GitHub 热点推送流程）
+   */
+  async collectGithubByUser(userId: string): Promise<CollectResult[]> {
+    const sources = await this.sourceRepo.find({
+      where: { userId, type: 'github', status: 'active' },
+    });
+
+    if (sources.length === 0) {
+      this.logger.warn(`用户 ${userId} 没有活跃的 GitHub 数据源`);
+      return [];
+    }
+
+    try {
+      const result = await this.collectByType('github', sources);
+      return [result];
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`GitHub 采集失败: ${msg}`);
+      return [
+        {
+          sourceType: 'github',
+          totalCollected: 0,
+          newSaved: 0,
+          duplicatesSkipped: 0,
+          errors: [msg],
+        },
+      ];
+    }
+  }
+
+  /**
    * 按类型调用对应采集器
    */
   private async collectByType(
@@ -114,8 +147,18 @@ export class CollectorService {
         );
         break;
 
+      case 'github':
+        rawContents = await this.githubCollector.collect(
+          sources.map((s) => ({
+            id: s.id,
+            identifier: s.identifier,
+            name: s.name,
+            config: s.config,
+          })),
+        );
+        break;
+
       // TODO: case 'rss': ...
-      // TODO: case 'github': ...
 
       default:
         errors.push(`不支持的采集类型: ${type}`);

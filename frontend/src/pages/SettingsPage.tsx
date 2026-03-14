@@ -12,6 +12,7 @@ import {
   Brain,
   Sparkles,
   Mail,
+  Github,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -58,6 +59,7 @@ export function SettingsPage() {
   const [credStatus, setCredStatus] = useState<CredentialStatus | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [sendingToday, setSendingToday] = useState(false);
+  const [runningGithub, setRunningGithub] = useState(false);
   const { toast } = useToast();
 
   const fetchStatus = useCallback(async () => {
@@ -188,6 +190,29 @@ export function SettingsPage() {
       });
     } finally {
       setSendingToday(false);
+    }
+  };
+
+  const handleRunGithub = async () => {
+    setRunningGithub(true);
+    try {
+      const res = await agentApi.runGithub(DEFAULT_USER_ID);
+      const data = res.data ?? res;
+      toast({
+        title: "GitHub Agent 执行完成",
+        description:
+          data.contentCount != null
+            ? `已分析并推送 ${data.contentCount} 个热门仓库`
+            : data.report || "执行完成",
+      });
+    } catch (e: unknown) {
+      toast({
+        title: "GitHub Agent 执行失败",
+        description: (e as Error).message,
+        variant: "destructive",
+      });
+    } finally {
+      setRunningGithub(false);
     }
   };
 
@@ -440,6 +465,27 @@ export function SettingsPage() {
                 <Play className="h-4 w-4 mr-1" />
               )}
               执行
+            </Button>
+          </div>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-medium text-sm">GitHub 热点 Agent</p>
+              <p className="text-xs text-muted-foreground">
+                Agent 自主决策：GitHub 热点采集 → AI 分析 → 专属邮件推送
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleRunGithub}
+              disabled={runningGithub}
+            >
+              {runningGithub ? (
+                <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+              ) : (
+                <Github className="h-4 w-4 mr-1" />
+              )}
+              {runningGithub ? "执行中..." : "执行"}
             </Button>
           </div>
         </CardContent>

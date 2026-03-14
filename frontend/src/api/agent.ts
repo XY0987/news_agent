@@ -5,6 +5,13 @@ export const agentApi = {
     return apiClient.post("/agent/run", { userId }).then((r) => r.data);
   },
 
+  /** 触发 GitHub 热点 Agent（LLM 自主决策：采集 + 分析 + 推送） */
+  runGithub(userId: string) {
+    return apiClient
+      .post("/agent/run-github", { userId }, { timeout: 300000 })
+      .then((r) => r.data);
+  },
+
   analyze(userId: string, daysWindow?: number) {
     return apiClient
       .post("/agent/analyze", { userId, daysWindow })

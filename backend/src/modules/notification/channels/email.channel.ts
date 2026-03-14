@@ -121,6 +121,211 @@ export class EmailChannel {
   }
 
   /**
+   * 发送 GitHub 热点趋势邮件
+   */
+  async sendGithubTrendingEmail(
+    to: string,
+    data: {
+      date: string;
+      agentNote?: string;
+      items: {
+        index: number;
+        title: string;
+        fullName: string;
+        description: string;
+        language: string;
+        stars: number;
+        starsToday: number;
+        forks: number;
+        trendSource: string;
+        topics: string[];
+        url: string;
+        finalScore: number;
+        breakdown: Record<string, number>;
+        summary: string;
+        actionSuggestions: { type: string; suggestion: string }[];
+      }[];
+    },
+  ): Promise<EmailResult> {
+    const subject = `🔥 GitHub 热点趋势 - ${data.date}`;
+    const html = this.renderGithubTrendingHtml(data);
+    const text = this.renderGithubTrendingText(data);
+    return this.send({ to, subject, html, text });
+  }
+
+  /**
+   * 渲染 GitHub 热点 HTML 邮件
+   */
+  private renderGithubTrendingHtml(data: {
+    date: string;
+    agentNote?: string;
+    items: {
+      index: number;
+      title: string;
+      fullName: string;
+      description: string;
+      language: string;
+      stars: number;
+      starsToday: number;
+      forks: number;
+      trendSource: string;
+      topics: string[];
+      url: string;
+      finalScore: number;
+      breakdown: Record<string, number>;
+      summary: string;
+      actionSuggestions: { type: string; suggestion: string }[];
+    }[];
+  }): string {
+    const langColorMap: Record<string, string> = {
+      TypeScript: '#3178c6',
+      JavaScript: '#f1e05a',
+      Python: '#3572a5',
+      Rust: '#dea584',
+      Go: '#00add8',
+      Java: '#b07219',
+      'C++': '#f34b7d',
+      C: '#555555',
+      Swift: '#f05138',
+      Kotlin: '#a97bff',
+      Vue: '#41b883',
+      HTML: '#e34c26',
+      CSS: '#563d7c',
+      Dart: '#00b4ab',
+      Ruby: '#701516',
+    };
+
+    const renderItem = (item: typeof data.items[0]) => {
+      const langColor = langColorMap[item.language] || '#8b949e';
+      const hasSummary = item.summary && item.summary.trim().length > 0;
+      const sourceLabel =
+        item.trendSource === 'github_trending'
+          ? '🏆 Trending'
+          : item.trendSource === 'trendingrepos_api'
+            ? '⭐ Most Popular'
+            : '📂 Topics';
+
+      return `
+      <div style="margin-bottom:20px;padding:20px;background:#fff;border-radius:12px;border:1px solid #d0d7de;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;">
+          <div style="flex:1;min-width:0;">
+            <h3 style="margin:0 0 6px;font-size:18px;">
+              <a href="${this.escapeHtml(item.url)}" style="color:#0969da;text-decoration:none;font-weight:600;" target="_blank">
+                ${this.escapeHtml(item.fullName || item.title)}
+              </a>
+            </h3>
+            ${item.description ? `<p style="margin:0 0 10px;font-size:14px;color:#57606a;line-height:1.5;">${this.escapeHtml(item.description)}</p>` : ''}
+          </div>
+          <div style="text-align:right;white-space:nowrap;margin-left:16px;">
+            <div style="font-size:12px;color:#8b949e;margin-bottom:4px;">${sourceLabel}</div>
+            ${item.finalScore > 0 ? `<div style="font-size:12px;background:#ddf4ff;color:#0969da;padding:2px 8px;border-radius:12px;display:inline-block;">评分 ${item.finalScore}</div>` : ''}
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-top:10px;font-size:13px;color:#57606a;">
+          ${item.language ? `<span style="display:flex;align-items:center;gap:4px;"><span style="width:12px;height:12px;border-radius:50%;background:${langColor};display:inline-block;"></span>${this.escapeHtml(item.language)}</span>` : ''}
+          <span>⭐ ${item.stars.toLocaleString()}</span>
+          ${item.starsToday > 0 ? `<span style="color:#1a7f37;font-weight:600;">🔥 +${item.starsToday.toLocaleString()}</span>` : ''}
+          ${item.forks > 0 ? `<span>🍴 ${item.forks.toLocaleString()}</span>` : ''}
+          ${item.topics && item.topics.length > 0 ? item.topics.slice(0, 3).map((t) => `<span style="background:#ddf4ff;color:#0969da;padding:1px 8px;border-radius:12px;font-size:11px;">${this.escapeHtml(t)}</span>`).join('') : ''}
+        </div>
+        ${
+          hasSummary
+            ? `<div style="margin-top:12px;padding:12px;background:#f6f8fa;border-radius:8px;border-left:3px solid #0969da;">
+                <p style="margin:0;font-size:14px;color:#1f2328;line-height:1.6;">${this.escapeHtml(item.summary)}</p>
+              </div>`
+            : ''
+        }
+        ${
+          item.actionSuggestions.length > 0
+            ? `<div style="margin-top:10px;padding:10px 12px;background:#dafbe1;border-radius:8px;">
+                <div style="font-size:12px;font-weight:600;color:#116329;margin-bottom:4px;">💡 个性化建议</div>
+                ${item.actionSuggestions.map((s) => `<div style="font-size:13px;color:#1a7f37;margin-bottom:3px;">• ${this.escapeHtml(s.suggestion)}</div>`).join('')}
+              </div>`
+            : ''
+        }
+        <div style="margin-top:12px;">
+          <a href="${this.escapeHtml(item.url)}" style="display:inline-block;padding:6px 16px;background:#2da44e;color:#fff;border-radius:6px;font-size:13px;text-decoration:none;font-weight:500;" target="_blank">查看仓库 →</a>
+        </div>
+      </div>`;
+    };
+
+    return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#f6f8fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <div style="max-width:680px;margin:0 auto;padding:24px;">
+    <div style="text-align:center;margin-bottom:24px;">
+      <div style="font-size:48px;margin-bottom:8px;">🔥</div>
+      <h1 style="margin:0;font-size:26px;color:#1f2328;font-weight:700;">GitHub 热点趋势</h1>
+      <p style="margin:6px 0 0;font-size:14px;color:#57606a;">${data.date}</p>
+    </div>
+    ${data.agentNote ? `<div style="background:#ddf4ff;padding:14px 18px;border-radius:10px;margin-bottom:20px;font-size:14px;color:#0969da;border-left:4px solid #0969da;">💡 ${this.escapeHtml(data.agentNote)}</div>` : ''}
+    <div style="font-size:13px;color:#57606a;margin-bottom:16px;padding:10px 14px;background:#fff;border-radius:8px;border:1px solid #d0d7de;">
+      🏆 共收录 <strong>${data.items.length}</strong> 个热门仓库 · 
+      总 Star 数 ${data.items.reduce((sum, i) => sum + i.stars, 0).toLocaleString()} · 
+      今日新增 ${data.items.reduce((sum, i) => sum + i.starsToday, 0).toLocaleString()} ⭐
+    </div>
+    ${data.items.map(renderItem).join('')}
+    <div style="text-align:center;margin-top:32px;padding-top:16px;border-top:1px solid #d0d7de;">
+      <p style="font-size:12px;color:#8b949e;">由 News Agent 智能精选 · GitHub 热点趋势</p>
+      <p style="font-size:11px;color:#8b949e;margin-top:4px;">
+        数据来源: GitHub Trending · TrendingRepos · GitHub Topics
+      </p>
+    </div>
+  </div>
+</body>
+</html>`;
+  }
+
+  /**
+   * 渲染 GitHub 热点纯文本（邮件降级）
+   */
+  private renderGithubTrendingText(data: {
+    date: string;
+    agentNote?: string;
+    items: {
+      index: number;
+      title: string;
+      fullName: string;
+      description: string;
+      language: string;
+      stars: number;
+      starsToday: number;
+      forks: number;
+      url: string;
+      summary: string;
+      actionSuggestions: { type: string; suggestion: string }[];
+    }[];
+  }): string {
+    let text = `🔥 GitHub 热点趋势 - ${data.date}\n${'='.repeat(45)}\n`;
+    text += `共 ${data.items.length} 个热门仓库\n\n`;
+
+    if (data.agentNote) {
+      text += `> ${data.agentNote}\n\n`;
+    }
+
+    for (const item of data.items) {
+      text += `${item.index}. ${item.fullName}\n`;
+      if (item.description) text += `   ${item.description}\n`;
+      text += `   ⭐ ${item.stars.toLocaleString()}`;
+      if (item.starsToday > 0) text += ` (+${item.starsToday.toLocaleString()})`;
+      if (item.language) text += ` · ${item.language}`;
+      text += '\n';
+      if (item.summary) text += `   📝 ${item.summary}\n`;
+      if (item.actionSuggestions.length > 0) {
+        text += `   💡 建议:\n`;
+        for (const s of item.actionSuggestions) {
+          text += `     - ${s.suggestion}\n`;
+        }
+      }
+      text += `   🔗 ${item.url}\n\n`;
+    }
+
+    return text;
+  }
+
+  /**
    * 渲染每日精选 HTML 邮件
    * 高分文章（>=60）完整展开，低分文章折叠（需点击展开查看）
    */

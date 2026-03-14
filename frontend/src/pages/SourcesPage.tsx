@@ -21,6 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { SourceCard } from "@/components/source/SourceCard";
 import { AddWechatDialog } from "@/components/source/AddWechatDialog";
+import { AddGithubDialog } from "@/components/source/AddGithubDialog";
 import { useSourceStore } from "@/store";
 import { useToast } from "@/hooks/use-toast";
 import { DEFAULT_USER_ID } from "@/utils";
@@ -121,6 +122,7 @@ export function SourcesPage() {
     useSourceStore();
   const { toast } = useToast();
   const [wechatDialogOpen, setWechatDialogOpen] = useState(false);
+  const [githubDialogOpen, setGithubDialogOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [collapsedTypes, setCollapsedTypes] = useState<Set<string>>(new Set());
   const [viewMode, setViewMode] = useState<"list" | "grid">("list");
@@ -150,7 +152,7 @@ export function SourcesPage() {
   }, [filteredSources]);
 
   const sourceTypes = useMemo(() => {
-    const types = new Set(["wechat", ...Object.keys(groupedSources)]);
+    const types = new Set(["wechat", "github", ...Object.keys(groupedSources)]);
     return Array.from(types);
   }, [groupedSources]);
 
@@ -286,6 +288,15 @@ export function SourcesPage() {
                         添加公众号
                       </Button>
                     )}
+                    {type === "github" && (
+                      <Button
+                        size="sm"
+                        onClick={() => setGithubDialogOpen(true)}
+                      >
+                        <Plus className="h-3.5 w-3.5 mr-1" />
+                        添加 GitHub 源
+                      </Button>
+                    )}
                   </div>
                 </CardHeader>
                 {!isCollapsed && (
@@ -294,6 +305,8 @@ export function SourcesPage() {
                       <div className="text-center py-6 text-muted-foreground text-sm">
                         {type === "wechat" ? (
                           <p>暂无公众号，点击上方按钮搜索添加</p>
+                        ) : type === "github" ? (
+                          <p>暂无 GitHub 数据源，点击上方按钮选择添加</p>
                         ) : (
                           <p>暂无 {config.label} 数据源</p>
                         )}
@@ -334,6 +347,10 @@ export function SourcesPage() {
       <AddWechatDialog
         open={wechatDialogOpen}
         onOpenChange={setWechatDialogOpen}
+      />
+      <AddGithubDialog
+        open={githubDialogOpen}
+        onOpenChange={setGithubDialogOpen}
       />
     </div>
   );

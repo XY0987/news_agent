@@ -42,8 +42,10 @@ export class FilterService {
     userId: string;
     minLength?: number;
     daysWindow?: number;
+    /** 按数据源类型过滤（如 'github'），不传则不限 */
+    sourceType?: string;
   }): Promise<FilterResult> {
-    const { userId, minLength = 100, daysWindow = 7 } = params;
+    const { userId, minLength = 100, daysWindow = 7, sourceType } = params;
     let contents: ContentEntity[];
 
     if (params.contentIds && params.contentIds.length > 0) {
@@ -63,6 +65,17 @@ export class FilterService {
         where: { collectedAt: MoreThanOrEqual(since) },
         order: { collectedAt: 'DESC' },
         take: 500,
+      });
+    }
+
+    // 按 sourceType 过滤（metadata.sourceType 或 metadata.sourceCategory）
+    if (sourceType) {
+      contents = contents.filter((c) => {
+        const meta = (c.metadata || {}) as Record<string, any>;
+        return (
+          meta.sourceType === sourceType ||
+          meta.sourceCategory === `${sourceType}_trending`
+        );
       });
     }
 

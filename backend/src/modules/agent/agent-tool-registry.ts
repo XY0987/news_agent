@@ -268,6 +268,31 @@ export class AgentToolRegistry {
     });
 
     this.register({
+      name: 'collect_github',
+      description:
+        '从 GitHub 热点数据源采集最新的热门仓库。支持 GitHub Trending、TrendingRepos API、GitHub Topics/frontend 三大来源。返回采集结果统计。',
+      parameters: {
+        type: 'object',
+        properties: {
+          userId: { type: 'string', description: '用户 ID' },
+          sourceIds: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              '指定采集哪些 GitHub 数据源 ID，不传则采集该用户全部 GitHub 源',
+          },
+        },
+        required: ['userId'],
+      },
+      execute: async ({ userId, sourceIds }) => {
+        if (sourceIds && sourceIds.length > 0) {
+          return this.collectorService.collectBySources(sourceIds);
+        }
+        return this.collectorService.collectGithubByUser(userId);
+      },
+    });
+
+    this.register({
       name: 'filter_and_dedup',
       description:
         '对采集到的内容进行去重和基础过滤（去垃圾、去广告、去过短内容、时间窗口过滤）。返回过滤后的内容 ID 列表。',
@@ -424,6 +449,35 @@ export class AgentToolRegistry {
       },
       execute: async ({ userId, contentIds, agentNote }) => {
         return this.notificationService.sendDigest({
+          userId,
+          contentIds,
+          agentNote,
+        });
+      },
+    });
+
+    this.register({
+      name: 'send_github_trending',
+      description:
+        '发送 GitHub 热点趋势邮件（独立于每日精选）。需要提供 GitHub 仓库相关的内容 ID 列表。会使用 GitHub 专属邮件模板展示仓库信息、Star 数、新增 Star 等数据。',
+      parameters: {
+        type: 'object',
+        properties: {
+          userId: { type: 'string', description: '用户 ID' },
+          contentIds: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'GitHub 热点仓库的内容 ID 列表',
+          },
+          agentNote: {
+            type: 'string',
+            description: 'Agent 想附带的说明，如"今日前端领域新增多个热门项目"',
+          },
+        },
+        required: ['userId', 'contentIds'],
+      },
+      execute: async ({ userId, contentIds, agentNote }) => {
+        return this.notificationService.sendGithubTrending({
           userId,
           contentIds,
           agentNote,

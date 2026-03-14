@@ -4,6 +4,11 @@ import { ConfigService } from '@nestjs/config';
 import { AgentService } from '../agent/agent.service';
 import { UserService } from '../user/user.service';
 import { EmailChannel } from '../notification/channels/email.channel';
+import { CollectorService } from '../collector/collector.service';
+import { SummaryService } from '../summary/summary.service';
+import { NotificationService } from '../notification/notification.service';
+import { SourceService } from '../source/source.service';
+import { FilterService } from '../filter/filter.service';
 import type { UserEntity } from '../../common/database/entities/user.entity';
 
 /**
@@ -24,6 +29,9 @@ export class SchedulerService {
   /** 今日已执行过的用户 ID 集合（防止同一天重复触发） */
   private todayExecutedUsers = new Set<string>();
 
+  /** 今日已执行过 GitHub 热点的用户 ID 集合 */
+  private todayGithubExecutedUsers = new Set<string>();
+
   /** 当前日期标记（用于跨天重置） */
   private currentDate = '';
 
@@ -34,6 +42,11 @@ export class SchedulerService {
     private readonly userService: UserService,
     private readonly configService: ConfigService,
     private readonly emailChannel: EmailChannel,
+    private readonly collectorService: CollectorService,
+    private readonly summaryService: SummaryService,
+    private readonly notificationService: NotificationService,
+    private readonly sourceService: SourceService,
+    private readonly filterService: FilterService,
   ) {
     this.alertEmail = this.configService.get<string>('ALERT_EMAIL') || '';
   }
@@ -64,6 +77,7 @@ export class SchedulerService {
     // 跨天重置已执行集合
     if (this.currentDate !== todayStr) {
       this.todayExecutedUsers.clear();
+      this.todayGithubExecutedUsers.clear();
       this.currentDate = todayStr;
       this.logger.log(`日期切换至 ${todayStr}，重置已执行用户列表（时区: Asia/Shanghai）`);
     }
@@ -86,6 +100,12 @@ export class SchedulerService {
           );
           // 异步执行，不阻塞轮询
           void this.executeAgentForUser(user);
+
+          // 同时触发 GitHub 热点独立采集推送（单独邮件）
+          if (!this.todayGithubExecutedUsers.has(user.id)) {
+            this.todayGithubExecutedUsers.add(user.id);
+            void this.executeGithubTrendingForUser(user);
+          }
         }
       }
     } catch (error) {
@@ -177,22 +197,153 @@ export class SchedulerService {
   }
 
   /**
+   * 为用户执行 GitHub 热点采集与独立邮件推送
+   * 流程：采集 GitHub 热点 → AI 摘要+评分 → 独立邮件推送
+   * public 以支持手动触发
+   */
+  async executeGithubTrendingForUser(user: UserEntity): Promise<{ success: boolean; message: string; repoCount?: number }> {
+    const userId = user.id;
+    this.logger.log(`[GitHub] 开始为用户 ${user.name} 采集 GitHub 热点`);
+
+    try {
+      // 1. 检查用户是否有 GitHub 数据源
+      const githubSources = await this.sourceService.findByUserAndType(
+        userId,
+        'github',
+      );
+
+      if (githubSources.length === 0) {
+        this.logger.log(
+          `[GitHub] 用户 ${user.name} 没有 GitHub 数据源，跳过`,
+        );
+        return { success: false, message: '没有配置 GitHub 数据源，请先在数据源页面添加' };
+      }
+
+      // 2. 采集 GitHub 热点
+      this.logger.log(
+        `[GitHub] 用户 ${user.name}: 开始采集 ${githubSources.length} 个 GitHub 数据源`,
+      );
+      const collectResults =
+        await this.collectorService.collectGithubByUser(userId);
+
+      const totalNew = collectResults.reduce(
+        (sum, r) => sum + r.newSaved,
+        0,
+      );
+      this.logger.log(
+        `[GitHub] 用户 ${user.name}: 采集完成，新增 ${totalNew} 条`,
+      );
+
+      if (totalNew === 0) {
+        this.logger.log(
+          `[GitHub] 用户 ${user.name}: 无新增内容，跳过推送`,
+        );
+        return { success: true, message: '采集完成但无新增内容', repoCount: 0 };
+      }
+
+      // 3. 过滤去重（只取 github 类型内容）
+      const filterResult = await this.filterService.filterAndDedup({
+        userId,
+        minLength: 10, // GitHub 内容通常较短，放宽限制
+        daysWindow: 1, // 只看今天采集的
+        sourceType: 'github',
+      });
+
+      const contentIds: string[] = filterResult.passedIds || [];
+      if (contentIds.length === 0) {
+        this.logger.log(
+          `[GitHub] 用户 ${user.name}: 过滤后无内容，跳过推送`,
+        );
+        return { success: true, message: '过滤去重后无新内容', repoCount: 0 };
+      }
+
+      this.logger.log(
+        `[GitHub] 用户 ${user.name}: 过滤后 ${contentIds.length} 条内容，开始 AI 分析`,
+      );
+
+      // 4. 批量 AI 摘要+评分（GitHub 内容分批处理）
+      const allSuccessIds: string[] = [];
+      const batchSize = 10;
+
+      for (let i = 0; i < contentIds.length; i += batchSize) {
+        const batch = contentIds.slice(i, i + batchSize);
+        try {
+          const summaryResult =
+            await this.summaryService.batchGenerateSummaries(batch, userId);
+          allSuccessIds.push(...summaryResult.successIds);
+          this.logger.log(
+            `[GitHub] 用户 ${user.name}: 批次 ${Math.floor(i / batchSize) + 1} AI 分析完成 (${summaryResult.totalSuccess}/${batch.length})`,
+          );
+        } catch (error) {
+          this.logger.error(
+            `[GitHub] AI 分析批次失败: ${(error as Error).message}`,
+          );
+        }
+      }
+
+      if (allSuccessIds.length === 0) {
+        this.logger.warn(
+          `[GitHub] 用户 ${user.name}: AI 分析全部失败，尝试直接推送原始内容`,
+        );
+        // 降级：即使没有 AI 摘要也发送
+        allSuccessIds.push(...contentIds.slice(0, 25));
+      }
+
+      // 5. 发送 GitHub 热点独立邮件
+      this.logger.log(
+        `[GitHub] 用户 ${user.name}: 发送 GitHub 热点邮件 (${allSuccessIds.length} 个仓库)`,
+      );
+
+      const sendResult = await this.notificationService.sendGithubTrending({
+        userId,
+        contentIds: allSuccessIds,
+        agentNote: `今日 GitHub 热点精选：从 ${githubSources.map((s) => s.name).join('、')} 等来源为您智能筛选了 ${allSuccessIds.length} 个值得关注的热门仓库。`,
+      });
+
+      this.logger.log(
+        `[GitHub] 用户 ${user.name}: 推送完成 - ${sendResult.success ? '成功' : '失败'}: ${sendResult.message}`,
+      );
+
+      return {
+        success: sendResult.success,
+        message: sendResult.message,
+        repoCount: allSuccessIds.length,
+      };
+    } catch (error) {
+      const errMsg = (error as Error).message;
+      this.logger.error(
+        `[GitHub] 用户 ${user.name} GitHub 热点推送异常: ${errMsg}`,
+      );
+
+      // 发送告警邮件
+      await this.sendAlertEmail(
+        'GitHub 热点推送异常',
+        `用户: ${user.name} (${userId})\n异常信息: ${errMsg}`,
+      );
+
+      return { success: false, message: `GitHub 热点推送异常: ${errMsg}` };
+    }
+  }
+
+  /**
    * 获取调度器状态
    */
   getStatus(): {
     runningUsers: string[];
     todayExecutedUsers: string[];
+    todayGithubExecutedUsers: string[];
     schedules: { name: string; cron: string; description: string }[];
   } {
     return {
       runningUsers: Array.from(this.runningUsers),
       todayExecutedUsers: Array.from(this.todayExecutedUsers),
+      todayGithubExecutedUsers: Array.from(this.todayGithubExecutedUsers),
       schedules: [
         {
           name: 'daily-agent-poll',
           cron: '0 * * * * *',
           description:
-            '每分钟轮询，匹配用户 notifyTime（HH:MM）后触发 Agent 全流程',
+            '每分钟轮询，匹配用户 notifyTime（HH:MM）后触发 Agent 全流程 + GitHub 热点独立推送',
         },
         {
           name: 'weekly-review',
