@@ -7,6 +7,7 @@ import { CollectorModule } from '../collector/collector.module';
 import { SummaryModule } from '../summary/summary.module';
 import { SourceModule } from '../source/source.module';
 import { FilterModule } from '../filter/filter.module';
+import { SkillModule } from '../skill/skill.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { FilterModule } from '../filter/filter.module';
     SummaryModule,
     SourceModule,
     FilterModule,
+    SkillModule,
   ],
   providers: [SchedulerService],
   exports: [SchedulerService],

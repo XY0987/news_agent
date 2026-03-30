@@ -26,6 +26,18 @@ class RunAnalysisDto {
   daysWindow?: number;
 }
 
+class DebugWechatDto {
+  @IsString()
+  @IsNotEmpty()
+  userId: string;
+
+  /** 最大采集文章数，默认 10 */
+  maxArticles?: number;
+
+  /** 是否跳过推送（默认 true，调试时不发邮件） */
+  skipPush?: boolean;
+}
+
 /**
  * Agent 交互接口
  * - POST /api/agent/run          手动触发 Agent 执行（调试用）
@@ -125,6 +137,41 @@ export class AgentController {
         {
           success: false,
           message: `AI 分析失败: ${(error as Error).message}`,
+        },
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
+   * POST /api/agent/debug-wechat
+   * 调试微信公众号采集 — 返回完整的 Agent Loop 执行详情（不截断工具结果）
+   */
+  @Post('debug-wechat')
+  async debugWechat(@Body() body: DebugWechatDto) {
+    if (!body.userId) {
+      throw new HttpException('userId is required', HttpStatus.BAD_REQUEST);
+    }
+
+    this.logger.log(
+      `调试微信采集: userId=${body.userId}, maxArticles=${body.maxArticles ?? 10}, skipPush=${body.skipPush ?? true}`,
+    );
+
+    try {
+      const result = await this.agentService.runDebugWechat(body.userId, {
+        maxArticles: body.maxArticles ?? 10,
+        skipPush: body.skipPush ?? true,
+      });
+      return {
+        success: true,
+        data: result,
+      };
+    } catch (error) {
+      this.logger.error(`调试微信采集失败: ${(error as Error).message}`);
+      throw new HttpException(
+        {
+          success: false,
+          message: `调试微信采集失败: ${(error as Error).message}`,
         },
         HttpStatus.INTERNAL_SERVER_ERROR,
       );

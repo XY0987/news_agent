@@ -8,3 +8,5 @@ export { HistoryPage } from './HistoryPage';
 export { SavedPage } from './SavedPage';
 export { InsightsPage } from './InsightsPage';
 export { SettingsPage } from './SettingsPage';
+export { SkillsPage } from './SkillsPage';
+export { DebugPage } from './DebugPage';

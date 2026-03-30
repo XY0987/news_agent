@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { userApi } from "@/api/user";
 import { sourceApi } from "@/api/source";
 import { contentApi } from "@/api/content";
+import { skillApi } from "@/api/skill";
 import type {
   User,
   UserProfile,
@@ -9,6 +10,9 @@ import type {
   Source,
   Content,
   Feedback,
+  Skill,
+  SkillDetail,
+  SkillExecution,
 } from "@/types";
 
 // ========== User Store ==========
@@ -211,6 +215,146 @@ export const useSourceStore = create<SourceState>((set) => ({
       set((state) => ({
         sources: state.sources.map((s) => (s.id === id ? res.data : s)),
       }));
+    } catch (e: unknown) {
+      set({ error: (e as Error).message });
+    }
+  },
+}));
+
+// ========== Skill Store ==========
+interface SkillState {
+  skills: Skill[];
+  selectedSkill: SkillDetail | null;
+  executions: SkillExecution[];
+  loading: boolean;
+  executing: boolean;
+  error: string | null;
+  fetchSkills: (userId: string) => Promise<void>;
+  fetchSkillDetail: (skillId: string, userId: string) => Promise<void>;
+  enableSkill: (
+    skillId: string,
+    userId: string,
+    settings?: Record<string, any>
+  ) => Promise<void>;
+  disableSkill: (skillId: string, userId: string) => Promise<void>;
+  updateSettings: (
+    skillId: string,
+    userId: string,
+    settings: Record<string, any>
+  ) => Promise<void>;
+  runSkill: (
+    skillId: string,
+    userId: string,
+    params?: Record<string, any>
+  ) => Promise<any>;
+  fetchExecutions: (
+    userId: string,
+    skillId?: string
+  ) => Promise<void>;
+  reloadSkills: (skillId?: string) => Promise<void>;
+}
+
+export const useSkillStore = create<SkillState>((set) => ({
+  skills: [],
+  selectedSkill: null,
+  executions: [],
+  loading: false,
+  executing: false,
+  error: null,
+
+  fetchSkills: async (userId: string) => {
+    set({ loading: true, error: null });
+    try {
+      const res = await skillApi.getAll(userId);
+      set({ skills: res.data, loading: false });
+    } catch (e: unknown) {
+      set({ error: (e as Error).message, loading: false });
+    }
+  },
+
+  fetchSkillDetail: async (skillId: string, userId: string) => {
+    set({ loading: true, error: null });
+    try {
+      const res = await skillApi.getDetail(skillId, userId);
+      set({ selectedSkill: res.data, loading: false });
+    } catch (e: unknown) {
+      set({ error: (e as Error).message, loading: false });
+    }
+  },
+
+  enableSkill: async (
+    skillId: string,
+    userId: string,
+    settings?: Record<string, any>
+  ) => {
+    try {
+      await skillApi.enable(skillId, userId, settings);
+      set((state) => ({
+        skills: state.skills.map((s) =>
+          s.id === skillId ? { ...s, status: "enabled" as const } : s
+        ),
+      }));
+    } catch (e: unknown) {
+      set({ error: (e as Error).message });
+      throw e;
+    }
+  },
+
+  disableSkill: async (skillId: string, userId: string) => {
+    try {
+      await skillApi.disable(skillId, userId);
+      set((state) => ({
+        skills: state.skills.map((s) =>
+          s.id === skillId ? { ...s, status: "disabled" as const } : s
+        ),
+      }));
+    } catch (e: unknown) {
+      set({ error: (e as Error).message });
+      throw e;
+    }
+  },
+
+  updateSettings: async (
+    skillId: string,
+    userId: string,
+    settings: Record<string, any>
+  ) => {
+    try {
+      await skillApi.updateSettings(skillId, userId, settings);
+    } catch (e: unknown) {
+      set({ error: (e as Error).message });
+      throw e;
+    }
+  },
+
+  runSkill: async (
+    skillId: string,
+    userId: string,
+    params?: Record<string, any>
+  ) => {
+    set({ executing: true, error: null });
+    try {
+      const res = await skillApi.run(skillId, userId, params);
+      set({ executing: false });
+      return res;
+    } catch (e: unknown) {
+      set({ error: (e as Error).message, executing: false });
+      throw e;
+    }
+  },
+
+  fetchExecutions: async (userId: string, skillId?: string) => {
+    try {
+      const res = await skillApi.getExecutions(userId, skillId);
+      set({ executions: res.data });
+    } catch (e: unknown) {
+      set({ error: (e as Error).message });
+    }
+  },
+
+  reloadSkills: async (skillId?: string) => {
+    try {
+      await skillApi.reload(skillId);
     } catch (e: unknown) {
       set({ error: (e as Error).message });
     }

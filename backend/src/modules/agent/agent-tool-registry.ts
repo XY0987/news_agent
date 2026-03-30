@@ -88,6 +88,57 @@ export class AgentToolRegistry {
     return Array.from(this.tools.keys());
   }
 
+  // ==================== 动态工具注册（供 Skill 脚本工具使用） ====================
+
+  /** 动态注册的工具名集合（用于后续批量清理） */
+  private dynamicToolNames = new Set<string>();
+
+  /**
+   * 动态注册工具（Skill 执行期间临时注册，执行完毕后清理）
+   *
+   * 与 registerAllTools() 中的静态注册不同，动态工具是 Skill 运行时按需注入的。
+   * 主要用于 Skill scripts/ 目录下的脚本，让 LLM 在推理过程中可以主动调用。
+   */
+  registerDynamic(entry: {
+    name: string;
+    description: string;
+    parameters: {
+      type: 'object';
+      properties: Record<string, any>;
+      required?: string[];
+    };
+    execute: ToolExecutor;
+  }): void {
+    this.register(entry);
+    this.dynamicToolNames.add(entry.name);
+    this.logger.log(`动态注册 Tool: ${entry.name}`);
+  }
+
+  /**
+   * 取消注册动态工具（Skill 执行完毕后调用）
+   */
+  unregisterDynamic(name: string): void {
+    if (this.dynamicToolNames.has(name)) {
+      this.tools.delete(name);
+      this.dynamicToolNames.delete(name);
+      this.logger.log(`动态取消注册 Tool: ${name}`);
+    }
+  }
+
+  /**
+   * 取消注册所有动态工具（批量清理）
+   */
+  unregisterAllDynamic(): void {
+    for (const name of this.dynamicToolNames) {
+      this.tools.delete(name);
+    }
+    const count = this.dynamicToolNames.size;
+    this.dynamicToolNames.clear();
+    if (count > 0) {
+      this.logger.log(`批量清理 ${count} 个动态 Tool`);
+    }
+  }
+
   // ==================== 注册所有 Tools ====================
 
   private registerAllTools(): void {

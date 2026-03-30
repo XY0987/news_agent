@@ -97,3 +97,82 @@ export interface Feedback {
   type: 'useful' | 'useless' | 'save' | 'ignore';
   reason?: string;
 }
+
+// ========== Skill 类型 ==========
+
+export interface Skill {
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  icon?: string;
+  tags?: string[];
+  category?: string;
+  builtin?: boolean;
+  triggerType: string;
+  status: 'enabled' | 'disabled' | 'not_configured';
+  settings?: Record<string, any>;
+}
+
+export interface SkillDetail extends Skill {
+  trigger: {
+    type: string;
+    schedule?: { cron: string };
+    manual?: { api?: boolean; ui?: boolean };
+  };
+  input?: {
+    required?: SkillInputParam[];
+    optional?: SkillInputParam[];
+  };
+  tools: {
+    include?: string[];
+    exclude?: string[];
+  };
+  agent?: {
+    maxSteps?: number;
+    model?: string;
+    temperature?: number;
+    timeout?: number;
+  };
+  settingDefinitions?: SkillSettingDef[];
+  userConfig: {
+    status: 'enabled' | 'disabled' | 'not_configured';
+    settings: Record<string, any>;
+  };
+  recentExecutions: SkillExecution[];
+}
+
+export interface SkillInputParam {
+  name: string;
+  type: string;
+  description: string;
+  default?: any;
+}
+
+export interface SkillSettingDef {
+  key: string;
+  label: string;
+  type: 'string' | 'number' | 'boolean' | 'select';
+  default?: any;
+  min?: number;
+  max?: number;
+  options?: string[] | { value: string; label: string }[];
+}
+
+export interface SkillExecution {
+  id: string;
+  sessionId: string;
+  status: 'running' | 'success' | 'failed';
+  stepsCount: number;
+  durationMs: number;
+  startedAt: string;
+  completedAt?: string;
+  errorMessage?: string;
+}
+
+export interface SkillRegistryStats {
+  total: number;
+  available: number;
+  categories: Record<string, number>;
+  triggerTypes: Record<string, number>;
+}

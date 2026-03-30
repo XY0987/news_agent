@@ -16,6 +16,7 @@ import { MemoryModule } from './modules/memory/memory.module';
 import { FeedbackModule } from './modules/feedback/feedback.module';
 import { DigestModule } from './modules/digest/digest.module';
 import { SchedulerModule } from './modules/scheduler/scheduler.module';
+import { SkillModule } from './modules/skill/skill.module';
 import { RedisModule } from './common/redis/redis.module';
 import { LlmRateLimiterModule } from './common/llm-rate-limiter/llm-rate-limiter.module';
 
@@ -75,6 +76,7 @@ import { LlmRateLimiterModule } from './common/llm-rate-limiter/llm-rate-limiter
     FeedbackModule,
     DigestModule,
     SchedulerModule,
+    SkillModule,
   ],
 })
 export class AppModule {}

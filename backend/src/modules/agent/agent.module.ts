@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AgentController } from './agent.controller';
 import { AgentService } from './agent.service';
@@ -15,6 +15,7 @@ import { UserModule } from '../user/user.module';
 import { ContentModule } from '../content/content.module';
 import { SourceModule } from '../source/source.module';
 import { DigestModule } from '../digest/digest.module';
+import { SkillModule } from '../skill/skill.module.js';
 
 @Module({
   imports: [
@@ -30,9 +31,10 @@ import { DigestModule } from '../digest/digest.module';
     ContentModule,
     SourceModule,
     DigestModule,
+    forwardRef(() => SkillModule),
   ],
   controllers: [AgentController],
   providers: [AgentService, AgentToolRegistry],
-  exports: [AgentService],
+  exports: [AgentService, AgentToolRegistry],
 })
 export class AgentModule {}

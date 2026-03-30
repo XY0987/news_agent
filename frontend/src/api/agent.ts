@@ -18,6 +18,20 @@ export const agentApi = {
       .then((r) => r.data);
   },
 
+  /** 调试微信公众号采集 — 返回完整 Agent Loop 执行详情 */
+  debugWechat(
+    userId: string,
+    options?: { maxArticles?: number; skipPush?: boolean }
+  ) {
+    return apiClient
+      .post(
+        "/agent/debug-wechat",
+        { userId, ...options },
+        { timeout: 600000 }
+      )
+      .then((r) => r.data);
+  },
+
   getLogs(userId: string, limit?: number) {
     return apiClient
       .get("/agent/logs", { params: { userId, limit } })

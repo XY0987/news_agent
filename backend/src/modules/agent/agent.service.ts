@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -16,6 +16,48 @@ import type {
   AgentToolCall,
   AgentToolResult,
 } from './agent.types';
+import type { AgentLoopConfig } from '../skill/skill-executor.service.js';
+import { SkillEnhancerService } from '../skill/skill-enhancer.service.js';
+
+/**
+ * 调试模式下一步的详细信息（不截断任何数据）
+ */
+export interface DebugStep {
+  step: number;
+  /** LLM 返回的思考文本（完整） */
+  thinking: string;
+  /** LLM 选择的工具调用列表（含完整参数） */
+  toolCalls: { id: string; name: string; args: Record<string, any> }[];
+  /** 工具执行结果（完整，不截断） */
+  toolResults: {
+    toolUseId: string;
+    toolName: string;
+    result: any;
+    isError: boolean;
+    durationMs: number;
+  }[];
+  durationMs: number;
+}
+
+/**
+ * 调试运行的完整返回结果
+ */
+export interface DebugWechatResult {
+  sessionId: string;
+  /** 完整的 system prompt */
+  systemPrompt: string;
+  /** 完整的 user message */
+  userMessage: string;
+  /** 每一步的详细信息 */
+  steps: DebugStep[];
+  /** 总执行步数 */
+  stepsUsed: number;
+  /** 总耗时 */
+  totalDurationMs: number;
+  /** 最终报告 */
+  report: string;
+  isSuccess: boolean;
+}
 
 /**
  * Agent 核心服务 - 智能信息管家的"大脑"
@@ -49,6 +91,8 @@ export class AgentService {
     private readonly sourceService: SourceService,
     private readonly configService: ConfigService,
     private readonly rateLimiter: LlmRateLimiterService,
+    @Inject(forwardRef(() => SkillEnhancerService))
+    private readonly skillEnhancer: SkillEnhancerService,
   ) {
     const baseURL =
       this.configService.get<string>('LLM_URL') || 'https://api.openai.com/v1';
@@ -642,26 +686,59 @@ export class AgentService {
 
   /**
    * 执行每日推送任务 - Agent 核心入口
+   *
+   * 支持 Skill 增强：如果用户启用了 Skill，其 name + description 会自动注入到
+   * systemPrompt 中，AI 根据描述自行判断是否运用这些能力。
    */
   async runDailyDigest(userId: string): Promise<AgentResult> {
     const user = await this.userService.findById(userId);
-    return this.runAgentLoop({
-      userId,
-      label: 'Agent',
-      systemPrompt: this.buildAgentSystemPrompt(user),
-      userMessage: `执行今日信息采集和推送任务。
+    let systemPrompt = this.buildAgentSystemPrompt(user);
+
+    // Skill 两阶段增强（参照 Claude Code Skills）：
+    // 第一阶段：注入已启用 Skill 的 name + description 到 systemPrompt
+    // 第二阶段：注册 load_skill 工具，AI 判断需要时主动加载完整 Skill 内容
+    const enhanced = await this.skillEnhancer.enhance(systemPrompt, userId);
+    systemPrompt = enhanced.systemPrompt;
+
+    // 将 Skill 工具（load_skill）动态注册到 ToolRegistry
+    if (enhanced.skillTools.length > 0) {
+      for (const tool of enhanced.skillTools) {
+        this.toolRegistry.registerDynamic({
+          name: tool.definition.function.name,
+          description: tool.definition.function.description,
+          parameters: tool.definition.function.parameters,
+          execute: tool.execute,
+        });
+      }
+      this.logger.log(
+        `每日推送 Skill 增强: ${enhanced.appliedSkills.map((s) => s.name).join(', ')} — 已注册 load_skill 工具`,
+      );
+    }
+
+    try {
+      return await this.runAgentLoop({
+        userId,
+        label: 'Agent',
+        systemPrompt,
+        userMessage: `执行今日信息采集和推送任务。
 当前时间: ${new Date().toISOString()}
 用户 ID: ${userId}
 用户名: ${user.name}
 你的目标是为用户产出一份高质量的每日精选推送。
 请自主决定执行步骤，合理使用可用工具。
 完成后输出最终的执行报告。`,
-      tools: this.toolRegistry.getToolDefinitions() as OpenAI.ChatCompletionTool[],
-      digestToolName: 'send_daily_digest',
-      defaultReport: '任务已完成',
-      enableAutoDigest: true,
-      enableFallbackAlert: true,
-    });
+        tools: this.toolRegistry.getToolDefinitions() as OpenAI.ChatCompletionTool[],
+        digestToolName: 'send_daily_digest',
+        defaultReport: '任务已完成',
+        enableAutoDigest: true,
+        enableFallbackAlert: true,
+      });
+    } finally {
+      // 清理动态注册的 Skill 工具，避免污染后续执行
+      for (const tool of enhanced.skillTools) {
+        this.toolRegistry.unregisterDynamic(tool.definition.function.name);
+      }
+    }
   }
 
   /**
@@ -931,12 +1008,34 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
    *
    * LLM 自主决策：采集 GitHub 热点 → 过滤去重 → AI 分析 → 发送 GitHub 专属邮件
    * 只提供 GitHub 相关工具，避免 LLM 分心去处理公众号等其他来源
+   *
+   * 支持 Skill 增强：用户已启用的 Skill 的 name + description 会自动注入。
    */
   async runGithubTrending(userId: string): Promise<AgentResult> {
     const user = await this.userService.findById(userId);
-    const allTools = this.toolRegistry.getToolDefinitions();
 
-    // 只保留 GitHub 相关工具
+    let systemPrompt = this.buildGithubAgentSystemPrompt(user);
+
+    // Skill 两阶段增强
+    const enhanced = await this.skillEnhancer.enhance(systemPrompt, userId);
+    systemPrompt = enhanced.systemPrompt;
+
+    // 将 Skill 工具动态注册到 ToolRegistry
+    if (enhanced.skillTools.length > 0) {
+      for (const tool of enhanced.skillTools) {
+        this.toolRegistry.registerDynamic({
+          name: tool.definition.function.name,
+          description: tool.definition.function.description,
+          parameters: tool.definition.function.parameters,
+          execute: tool.execute,
+        });
+      }
+      this.logger.log(
+        `GitHub Agent Skill 增强: ${enhanced.appliedSkills.map((s) => s.name).join(', ')}`,
+      );
+    }
+
+    // 只保留 GitHub 相关工具 + Skill 工具（如 load_skill）
     const githubToolNames = new Set([
       'read_user_profile',
       'get_user_sources',
@@ -950,28 +1049,38 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
       'send_github_trending',
       'store_memory',
       'analyze_source_quality',
+      // 包含 Skill 相关工具
+      ...enhanced.skillTools.map((t) => t.definition.function.name),
     ]);
+
+    const allTools = this.toolRegistry.getToolDefinitions();
     const githubTools = allTools.filter((t) =>
       githubToolNames.has(t.function?.name || ''),
     );
 
-    return this.runAgentLoop({
-      userId,
-      label: 'GitHub Agent',
-      systemPrompt: this.buildGithubAgentSystemPrompt(user),
-      userMessage: `执行 GitHub 热点采集与推送任务。
+    try {
+      return await this.runAgentLoop({
+        userId,
+        label: 'GitHub Agent',
+        systemPrompt,
+        userMessage: `执行 GitHub 热点采集与推送任务。
 当前时间: ${new Date().toISOString()}
 用户 ID: ${userId}
 用户名: ${user.name}
 你的目标是采集 GitHub 热门仓库，进行 AI 分析，并发送 GitHub 专属邮件推送。
 请自主决定执行步骤，合理使用可用工具。
 完成后输出最终的执行报告。`,
-      tools: githubTools as OpenAI.ChatCompletionTool[],
-      digestToolName: 'send_github_trending',
-      defaultReport: 'GitHub 热点任务已完成',
-      enableAutoDigest: false,
-      enableFallbackAlert: false,
-    });
+        tools: githubTools as OpenAI.ChatCompletionTool[],
+        digestToolName: 'send_github_trending',
+        defaultReport: 'GitHub 热点任务已完成',
+        enableAutoDigest: false,
+        enableFallbackAlert: false,
+      });
+    } finally {
+      for (const tool of enhanced.skillTools) {
+        this.toolRegistry.unregisterDynamic(tool.definition.function.name);
+      }
+    }
   }
 
   /**
@@ -1189,6 +1298,8 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
    * AI 分析模式 — Agent Loop 决策（跳过采集）
    * 与 runDailyDigest 相同的 Agent Loop，但 system prompt 指示跳过采集环节，
    * 直接从数据库读取已有文章进行分析。
+   *
+   * 支持 Skill 两阶段增强（参照 Claude Code Skills）。
    */
   async runAnalysisOnly(
     userId: string,
@@ -1196,11 +1307,33 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
   ): Promise<AgentResult> {
     const daysWindow = options?.daysWindow ?? 1;
     const user = await this.userService.findById(userId);
-    return this.runAgentLoop({
-      userId,
-      label: 'Agent 分析',
-      systemPrompt: this.buildAnalysisSystemPrompt(user),
-      userMessage: `执行 AI 分析任务（跳过采集，仅分析数据库中已有的文章）。
+    let systemPrompt = this.buildAnalysisSystemPrompt(user);
+
+    // Skill 两阶段增强
+    const enhanced = await this.skillEnhancer.enhance(systemPrompt, userId);
+    systemPrompt = enhanced.systemPrompt;
+
+    // 将 Skill 工具动态注册到 ToolRegistry
+    if (enhanced.skillTools.length > 0) {
+      for (const tool of enhanced.skillTools) {
+        this.toolRegistry.registerDynamic({
+          name: tool.definition.function.name,
+          description: tool.definition.function.description,
+          parameters: tool.definition.function.parameters,
+          execute: tool.execute,
+        });
+      }
+      this.logger.log(
+        `分析模式 Skill 增强: ${enhanced.appliedSkills.map((s) => s.name).join(', ')}`,
+      );
+    }
+
+    try {
+      return await this.runAgentLoop({
+        userId,
+        label: 'Agent 分析',
+        systemPrompt,
+        userMessage: `执行 AI 分析任务（跳过采集，仅分析数据库中已有的文章）。
 当前时间: ${new Date().toISOString()}
 用户 ID: ${userId}
 用户名: ${user.name}
@@ -1208,12 +1341,17 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
 你的目标是对数据库中已有的文章进行高质量的 AI 分析、评分和推送。
 请自主决定执行步骤，合理使用可用工具。
 完成后输出最终的执行报告。`,
-      tools: this.toolRegistry.getToolDefinitions() as OpenAI.ChatCompletionTool[],
-      digestToolName: 'send_daily_digest',
-      defaultReport: '分析任务已完成',
-      enableAutoDigest: true,
-      enableFallbackAlert: true,
-    });
+        tools: this.toolRegistry.getToolDefinitions() as OpenAI.ChatCompletionTool[],
+        digestToolName: 'send_daily_digest',
+        defaultReport: '分析任务已完成',
+        enableAutoDigest: true,
+        enableFallbackAlert: true,
+      });
+    } finally {
+      for (const tool of enhanced.skillTools) {
+        this.toolRegistry.unregisterDynamic(tool.definition.function.name);
+      }
+    }
   }
 
   /**
@@ -1343,5 +1481,322 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
       stepCount: parseInt(l.stepCount, 10),
       actions: l.actions ? l.actions.split(',') : [],
     }));
+  }
+
+  // ==================== 调试模式 ====================
+
+  /**
+   * 调试微信公众号采集 — 运行一个简化的 Agent Loop，返回完整不截断的步骤详情
+   *
+   * 特点：
+   * - System Prompt 指定只采集 maxArticles 篇文章
+   * - 可选跳过推送（skipPush=true 时不提供推送工具）
+   * - 工具执行结果不截断，完整返回给前端展示
+   * - 最多 15 步（调试模式步数缩短）
+   */
+  async runDebugWechat(
+    userId: string,
+    options?: { maxArticles?: number; skipPush?: boolean },
+  ): Promise<DebugWechatResult> {
+    const maxArticles = options?.maxArticles ?? 10;
+    const skipPush = options?.skipPush ?? true;
+    const sessionId = uuidv4();
+    const startTime = Date.now();
+    const maxDebugSteps = 15;
+
+    this.logger.log(
+      `[${sessionId}] Debug WeChat 开始: userId=${userId}, maxArticles=${maxArticles}, skipPush=${skipPush}`,
+    );
+
+    const user = await this.userService.findById(userId);
+
+    let systemPrompt = `你是一个智能信息管家 Agent，当前处于**调试模式**。
+
+## 调试任务
+从微信公众号采集最新文章（最多 ${maxArticles} 篇），然后对采集到的文章进行过滤和 AI 分析。
+${skipPush ? '**注意：调试模式下不需要发送推送。完成分析后直接输出报告即可。**' : '完成分析后发送推送。'}
+
+## 你的能力（Tools）
+
+### 感知类工具
+- read_user_profile: 读取用户画像和偏好设置
+- get_user_sources: 获取用户的数据源列表
+
+### 行动类工具
+- collect_wechat: 从微信公众号采集最新文章。返回 savedContentIds
+- filter_and_dedup: 对内容进行去重和过滤。必须传入 savedContentIds 作为 contentIds 参数
+- batch_generate_summaries: 批量生成 AI 摘要+评分（每批最多 10 条）
+- get_recent_contents: 获取最近采集的内容列表
+${skipPush ? '' : '- send_daily_digest: 发送每日精选推送'}
+
+## 推荐工作流程
+1. 获取用户数据源列表（了解有哪些公众号）
+2. 采集微信公众号文章（collect_wechat）
+3. 过滤去重（filter_and_dedup，传入 savedContentIds）
+4. 批量生成 AI 摘要+评分（batch_generate_summaries）
+${skipPush ? '5. 输出执行报告' : '5. 发送推送（send_daily_digest）\n6. 输出执行报告'}
+
+## 数据流转
+collect_wechat → savedContentIds → filter_and_dedup(contentIds=savedContentIds) → passedIds → batch_generate_summaries(contentIds=passedIds) → successIds
+${skipPush ? '' : '→ send_daily_digest(contentIds=successIds)'}
+
+## 用户画像
+${JSON.stringify(user.profile || {}, null, 2)}
+
+## 重要提醒
+- 用户 ID 为: ${user.id}
+- 调试模式，请务必完成所有步骤后输出报告`;
+
+    // Skill 两阶段增强（参照 Claude Code Skills）：
+    // 第一阶段：注入已启用 Skill 的 name + description 到 systemPrompt
+    // 第二阶段：注册 load_skill 工具，AI 判断需要时主动加载完整 Skill 内容
+    const enhanced = await this.skillEnhancer.enhance(systemPrompt, userId);
+    systemPrompt = enhanced.systemPrompt;
+
+    // 将 Skill 工具（load_skill）动态注册到 ToolRegistry
+    if (enhanced.skillTools.length > 0) {
+      for (const tool of enhanced.skillTools) {
+        this.toolRegistry.registerDynamic({
+          name: tool.definition.function.name,
+          description: tool.definition.function.description,
+          parameters: tool.definition.function.parameters,
+          execute: tool.execute,
+        });
+      }
+      this.logger.log(
+        `Debug WeChat Skill 增强: ${enhanced.appliedSkills.map((s) => s.name).join(', ')} — 已注册 load_skill 工具`,
+      );
+    }
+
+    const userMessage = `执行微信公众号调试采集任务。
+当前时间: ${new Date().toISOString()}
+用户 ID: ${userId}
+用户名: ${user.name}
+最大采集文章数: ${maxArticles}
+请按工作流程执行，完成后输出执行报告。`;
+
+    // 选择工具集（包括动态注册的 Skill 工具）
+    const allTools = this.toolRegistry.getToolDefinitions();
+    const debugToolNames = new Set([
+      'read_user_profile',
+      'get_user_sources',
+      'collect_wechat',
+      'filter_and_dedup',
+      'batch_generate_summaries',
+      'generate_summary',
+      'get_recent_contents',
+      ...(skipPush ? [] : ['send_daily_digest']),
+      // 自动加入 Skill 工具（如 load_skill）
+      ...enhanced.skillTools.map((t) => t.definition.function.name),
+    ]);
+    const tools = allTools.filter((t) =>
+      debugToolNames.has(t.function?.name || ''),
+    );
+
+    const debugSteps: DebugStep[] = [];
+
+    try {
+      const messages: OpenAI.ChatCompletionMessageParam[] = [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userMessage },
+      ];
+
+      for (let step = 0; step < maxDebugSteps; step++) {
+        const stepStart = Date.now();
+        this.logger.log(`[${sessionId}] Debug Step ${step + 1}: 调用 LLM...`);
+
+        let response: OpenAI.ChatCompletion;
+        try {
+          response = await this.callLLMWithRetry(
+            sessionId,
+            messages,
+            tools as OpenAI.ChatCompletionTool[],
+          );
+        } catch (error) {
+          this.logger.error(
+            `[${sessionId}] Debug LLM 调用失败: ${(error as Error).message}`,
+          );
+          debugSteps.push({
+            step: step + 1,
+            thinking: `LLM 调用失败: ${(error as Error).message}`,
+            toolCalls: [],
+            toolResults: [],
+            durationMs: Date.now() - stepStart,
+          });
+          break;
+        }
+
+        const choice = response.choices[0];
+        if (!choice) break;
+
+        const assistantMessage = choice.message;
+        const thinking = assistantMessage.content || '';
+        const toolCallsRaw = assistantMessage.tool_calls || [];
+
+        const toolCalls = toolCallsRaw
+          .filter(
+            (
+              tc,
+            ): tc is OpenAI.ChatCompletionMessageToolCall & {
+              type: 'function';
+            } => tc.type === 'function',
+          )
+          .map((tc) => ({
+            id: tc.id,
+            name: tc.function.name,
+            args: JSON.parse(tc.function.arguments || '{}'),
+          }));
+
+        // LLM 没有调用工具 → 任务完成
+        if (toolCallsRaw.length === 0 || choice.finish_reason === 'stop') {
+          debugSteps.push({
+            step: step + 1,
+            thinking,
+            toolCalls: [],
+            toolResults: [],
+            durationMs: Date.now() - stepStart,
+          });
+          break;
+        }
+
+        // 加入消息历史
+        messages.push(assistantMessage);
+
+        // 执行工具（不截断结果）
+        const toolResults: DebugStep['toolResults'] = [];
+        const toolResultMessages: OpenAI.ChatCompletionToolMessageParam[] =
+          await Promise.all(
+            toolCalls.map(async (tc) => {
+              const toolStart = Date.now();
+              try {
+                const result = await this.toolRegistry.executeTool(
+                  tc.name,
+                  tc.args,
+                );
+                const resultStr = JSON.stringify(result);
+
+                toolResults.push({
+                  toolUseId: tc.id,
+                  toolName: tc.name,
+                  result, // 完整结果，不截断
+                  isError: false,
+                  durationMs: Date.now() - toolStart,
+                });
+
+                // 给 LLM 的消息仍然需要截断，避免 token 爆炸
+                const truncatedForLLM =
+                  resultStr.length > 8000
+                    ? this.smartTruncateToolResult(result, 8000)
+                    : resultStr;
+
+                return {
+                  role: 'tool' as const,
+                  tool_call_id: tc.id,
+                  content: truncatedForLLM,
+                };
+              } catch (error) {
+                const errorMsg = `Tool 执行失败: ${(error as Error).message}`;
+                toolResults.push({
+                  toolUseId: tc.id,
+                  toolName: tc.name,
+                  result: errorMsg,
+                  isError: true,
+                  durationMs: Date.now() - toolStart,
+                });
+                return {
+                  role: 'tool' as const,
+                  tool_call_id: tc.id,
+                  content: errorMsg,
+                };
+              }
+            }),
+          );
+
+        debugSteps.push({
+          step: step + 1,
+          thinking,
+          toolCalls,
+          toolResults,
+          durationMs: Date.now() - stepStart,
+        });
+
+        messages.push(...toolResultMessages);
+        this.pruneMessagesIfNeeded(messages);
+      }
+
+      // 记录日志
+      const agentSteps: AgentStep[] = debugSteps.map((ds) => ({
+        step: ds.step,
+        thinking: ds.thinking,
+        toolCalls: ds.toolCalls.map((tc) => ({
+          id: tc.id,
+          name: tc.name,
+          args: tc.args,
+        })),
+        toolResults: ds.toolResults.map((tr) => ({
+          toolUseId: tr.toolUseId,
+          toolName: tr.toolName,
+          result: JSON.stringify(tr.result).slice(0, 2000),
+          isError: tr.isError,
+          durationMs: tr.durationMs,
+        })),
+        durationMs: ds.durationMs,
+      }));
+      await this.logAgentExecution(userId, sessionId, agentSteps);
+
+      const lastStep = debugSteps[debugSteps.length - 1];
+      return {
+        sessionId,
+        systemPrompt,
+        userMessage,
+        steps: debugSteps,
+        stepsUsed: debugSteps.length,
+        totalDurationMs: Date.now() - startTime,
+        report: lastStep?.thinking || '调试任务完成',
+        isSuccess: true,
+      };
+    } catch (error) {
+      return {
+        sessionId,
+        systemPrompt,
+        userMessage,
+        steps: debugSteps,
+        stepsUsed: debugSteps.length,
+        totalDurationMs: Date.now() - startTime,
+        report: `调试执行异常: ${(error as Error).message}`,
+        isSuccess: false,
+      };
+    } finally {
+      // 清理动态注册的 Skill 工具，避免污染后续执行
+      for (const tool of enhanced.skillTools) {
+        this.toolRegistry.unregisterDynamic(tool.definition.function.name);
+      }
+    }
+  }
+
+  // ==================== Skill 执行入口 ====================
+
+  /**
+   * 通用 Skill 执行入口
+   *
+   * 与现有的 runDailyDigest / runGithubTrending / runAnalysisOnly 并列
+   * 接收由 SkillExecutor 构建的 AgentLoopConfig，直接复用 runAgentLoop()
+   */
+  async runSkill(config: AgentLoopConfig): Promise<AgentResult> {
+    this.logger.log(
+      `${config.label} 开始执行: userId=${config.userId}, tools=${config.tools.length}`,
+    );
+
+    return this.runAgentLoop({
+      userId: config.userId,
+      label: config.label,
+      systemPrompt: config.systemPrompt,
+      userMessage: config.userMessage,
+      tools: config.tools as OpenAI.ChatCompletionTool[],
+      digestToolName: config.digestToolName,
+      defaultReport: config.defaultReport,
+      enableAutoDigest: config.enableAutoDigest,
+      enableFallbackAlert: config.enableFallbackAlert,
+    });
   }
 }

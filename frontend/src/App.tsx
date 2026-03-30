@@ -11,6 +11,8 @@ import {
   SavedPage,
   InsightsPage,
   SettingsPage,
+  SkillsPage,
+  DebugPage,
 } from "@/pages";
 
 function App() {
@@ -27,6 +29,8 @@ function App() {
           <Route path="/history" element={<HistoryPage />} />
           <Route path="/saved" element={<SavedPage />} />
           <Route path="/insights" element={<InsightsPage />} />
+          <Route path="/skills" element={<SkillsPage />} />
+          <Route path="/debug" element={<DebugPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
       </Routes>

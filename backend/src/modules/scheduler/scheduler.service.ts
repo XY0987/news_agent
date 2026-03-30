@@ -9,6 +9,9 @@ import { SummaryService } from '../summary/summary.service';
 import { NotificationService } from '../notification/notification.service';
 import { SourceService } from '../source/source.service';
 import { FilterService } from '../filter/filter.service';
+import { SkillService } from '../skill/skill.service.js';
+import { SkillExecutorService } from '../skill/skill-executor.service.js';
+import { SkillRegistryService } from '../skill/skill-registry.service.js';
 import type { UserEntity } from '../../common/database/entities/user.entity';
 
 /**
@@ -32,6 +35,12 @@ export class SchedulerService {
   /** 今日已执行过 GitHub 热点的用户 ID 集合 */
   private todayGithubExecutedUsers = new Set<string>();
 
+  /** 今日已执行过的 Skill:userId 集合（防止同一天重复触发） */
+  private todaySkillExecutedUsers = new Set<string>();
+
+  /** 正在执行的 Skill:userId 集合（防止同一 Skill 同一用户并发） */
+  private readonly runningSkills = new Set<string>();
+
   /** 当前日期标记（用于跨天重置） */
   private currentDate = '';
 
@@ -47,6 +56,9 @@ export class SchedulerService {
     private readonly notificationService: NotificationService,
     private readonly sourceService: SourceService,
     private readonly filterService: FilterService,
+    private readonly skillService: SkillService,
+    private readonly skillExecutor: SkillExecutorService,
+    private readonly skillRegistry: SkillRegistryService,
   ) {
     this.alertEmail = this.configService.get<string>('ALERT_EMAIL') || '';
   }
@@ -78,6 +90,7 @@ export class SchedulerService {
     if (this.currentDate !== todayStr) {
       this.todayExecutedUsers.clear();
       this.todayGithubExecutedUsers.clear();
+      this.todaySkillExecutedUsers.clear();
       this.currentDate = todayStr;
       this.logger.log(`日期切换至 ${todayStr}，重置已执行用户列表（时区: Asia/Shanghai）`);
     }
@@ -194,6 +207,150 @@ export class SchedulerService {
   handleWeeklyReview(): void {
     this.logger.log('=== 定时任务: 周报与反思（预留）===');
     // TODO: 实现周报生成和 Agent 反思逻辑
+  }
+
+  /**
+   * 每 10 分钟检查一次：是否有用户启用的 Skill 需要每日执行
+   *
+   * 标准 Skill 格式中，frontmatter 只有 name + description，
+   * 不再包含 trigger/cron 配置。调度策略简化为：
+   * - 获取所有已注册的 Skill
+   * - 获取所有用户
+   * - 对于每个已启用的 Skill，检查该用户今日是否已执行过
+   * - 在用户 notifyTime 后触发（与每日推送同步）
+   *
+   * 注意：如果需要更精细的调度控制，应由外部调度系统或用户手动触发
+   */
+  @Cron('0 */10 * * * *', { name: 'skill-schedule-poll' })
+  async handleSkillSchedulePoll(): Promise<void> {
+    try {
+      // 获取所有已注册的 Skill
+      const allSkills = this.skillRegistry.list({
+        isAvailable: true,
+      });
+
+      if (allSkills.length === 0) return;
+
+      const users = await this.userService.findAll();
+      if (users.length === 0) return;
+
+      // 当前时间（北京时间）
+      const now = new Date();
+      const cnFormatter = new Intl.DateTimeFormat('zh-CN', {
+        timeZone: 'Asia/Shanghai',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      });
+      const timeParts = cnFormatter.formatToParts(now);
+      const currentHHMM = `${timeParts.find((p) => p.type === 'hour')?.value || '00'}:${timeParts.find((p) => p.type === 'minute')?.value || '00'}`;
+
+      for (const entry of allSkills) {
+        const skill = entry.skill;
+
+        for (const user of users) {
+          // 与用户 notifyTime 同步触发（10 分钟窗口内匹配）
+          const notifyTime = this.getUserNotifyTime(user);
+          const [notifyH, notifyM] = notifyTime.split(':').map(Number);
+          const [curH, curM] = currentHHMM.split(':').map(Number);
+
+          // 在 notifyTime 后的 10 分钟窗口内触发
+          const notifyMinutes = notifyH * 60 + notifyM;
+          const currentMinutes = curH * 60 + curM;
+          if (currentMinutes < notifyMinutes || currentMinutes >= notifyMinutes + 10) continue;
+
+          // 检查是否今日已执行（通过 todaySkillExecuted 集合防重复）
+          const skillUserKey = `${skill.id}:${user.id}`;
+          if (this.todaySkillExecutedUsers.has(skillUserKey)) continue;
+          if (this.runningSkills.has(skillUserKey)) continue;
+
+          // 检查用户是否启用了该 Skill
+          const userSkills = await this.skillService.listSkills(user.id);
+          const userSkill = userSkills.find(
+            (s) => s.id === skill.id && s.status === 'enabled',
+          );
+          if (!userSkill) continue;
+
+          this.logger.log(
+            `定时 Skill 触发: ${skill.frontmatter.name} (${skill.id}) for user=${user.name}`,
+          );
+
+          // 异步执行，不阻塞轮询
+          void this.executeScheduledSkill(user, skill.id);
+        }
+      }
+    } catch (error) {
+      this.logger.error(`Skill 调度轮询异常: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * 执行定时触发的 Skill（完整流程）
+   */
+  private async executeScheduledSkill(
+    user: UserEntity,
+    skillId: string,
+  ): Promise<void> {
+    const skillUserKey = `${skillId}:${user.id}`;
+    this.runningSkills.add(skillUserKey);
+    this.todaySkillExecutedUsers.add(skillUserKey);
+
+    try {
+      // 1. 准备执行
+      const { context, executionId } = await this.skillService.prepareExecution(
+        {
+          skillId,
+          userId: user.id,
+        },
+      );
+
+      // 2. 执行生命周期（pre_run + buildConfig）
+      const { config } = await this.skillExecutor.executeLifecycle(context);
+
+      // 3. 调用 AgentService.runSkill()
+      const agentResult = await this.agentService.runSkill(config);
+
+      // 4. 执行 post_run 钩子
+      try {
+        await this.skillExecutor.executePostRun(context, agentResult);
+      } catch (postRunError) {
+        this.logger.warn(
+          `Skill ${skillId} post_run 钩子异常: ${(postRunError as Error).message}`,
+        );
+      }
+
+      // 5. 更新执行记录
+      if (agentResult.isSuccess) {
+        await this.skillService.markExecutionSuccess(executionId, {
+          stepsCount: agentResult.stepsUsed,
+          durationMs: agentResult.totalDurationMs,
+          outputData: {
+            report: agentResult.report,
+            digestSent: agentResult.digestSent,
+            contentCount: agentResult.contentCount,
+            isFallback: agentResult.isFallback,
+          },
+        });
+      } else {
+        await this.skillService.markExecutionFailed(executionId, {
+          errorMessage: agentResult.report,
+          durationMs: agentResult.totalDurationMs,
+          stepsCount: agentResult.stepsUsed,
+        });
+      }
+
+      this.logger.log(
+        `定时 Skill 执行完成: ${skillId} for user=${user.name}, ` +
+          `success=${agentResult.isSuccess}, steps=${agentResult.stepsUsed}, ` +
+          `duration=${agentResult.totalDurationMs}ms`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `定时 Skill ${skillId} 执行异常 (userId=${user.id}): ${(error as Error).message}`,
+      );
+    } finally {
+      this.runningSkills.delete(skillUserKey);
+    }
   }
 
   /**
@@ -332,12 +489,16 @@ export class SchedulerService {
     runningUsers: string[];
     todayExecutedUsers: string[];
     todayGithubExecutedUsers: string[];
+    todaySkillExecutedUsers: string[];
+    runningSkills: string[];
     schedules: { name: string; cron: string; description: string }[];
   } {
     return {
       runningUsers: Array.from(this.runningUsers),
       todayExecutedUsers: Array.from(this.todayExecutedUsers),
       todayGithubExecutedUsers: Array.from(this.todayGithubExecutedUsers),
+      todaySkillExecutedUsers: Array.from(this.todaySkillExecutedUsers),
+      runningSkills: Array.from(this.runningSkills),
       schedules: [
         {
           name: 'daily-agent-poll',
@@ -349,6 +510,11 @@ export class SchedulerService {
           name: 'weekly-review',
           cron: '0 0 10 * * 0',
           description: '每周日 10:00 执行周报与反思',
+        },
+        {
+          name: 'skill-schedule-poll',
+          cron: '0 */10 * * * *',
+          description: '每 10 分钟轮询，检查定时 Skill 触发',
         },
       ],
     };

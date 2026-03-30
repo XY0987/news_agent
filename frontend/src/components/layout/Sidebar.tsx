@@ -9,6 +9,8 @@ import {
   Bookmark,
   Brain,
   SlidersHorizontal,
+  Puzzle,
+  Bug,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
@@ -17,7 +19,9 @@ const navItems = [
   { to: "/", icon: Sparkles, label: "今日精选" },
   { to: "/feed", icon: Rss, label: "信息流" },
   { to: "/sources", icon: FolderOpen, label: "数据源" },
+  { to: "/skills", icon: Puzzle, label: "Skills 技能" },
   { to: "/insights", icon: Brain, label: "Agent 洞察" },
+  { to: "/debug", icon: Bug, label: "调试工具" },
 ];
 
 const secondaryItems = [

@@ -7,3 +7,5 @@ export { MemoryEntity } from './memory.entity';
 export { DigestEntity } from './digest.entity';
 export { AgentLogEntity } from './agent-log.entity';
 export { UserContentInteractionEntity } from './user-content-interaction.entity';
+export { SkillConfigEntity } from './skill-config.entity';
+export { SkillExecutionEntity } from './skill-execution.entity';
