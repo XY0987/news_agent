@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { exec } from 'child_process';
+import { SkillSandboxService } from './skill-sandbox.service.js';
 import type { SkillPromptVariables } from './skill.types.js';
 
 /**
@@ -16,6 +16,8 @@ import type { SkillPromptVariables } from './skill.types.js';
 export class SkillPromptService {
   private readonly logger = new Logger(SkillPromptService.name);
 
+  constructor(private readonly sandbox: SkillSandboxService) {}
+
   /**
    * 对 Prompt 模板进行变量插值
    *
@@ -23,10 +25,7 @@ export class SkillPromptService {
    * @param variables 变量上下文
    * @returns 插值后的完整 Prompt
    */
-  interpolate(
-    template: string,
-    variables: SkillPromptVariables,
-  ): string {
+  interpolate(template: string, variables: SkillPromptVariables): string {
     let result = template;
 
     // 1. 处理条件块 {{#key}}...{{/key}}
@@ -100,32 +99,38 @@ export class SkillPromptService {
   ): string {
     const blockRegex = /\{\{#(\w+(?:\.\w+)*)\}\}([\s\S]*?)\{\{\/\1\}\}/g;
 
-    return template.replace(blockRegex, (_match, key: string, content: string) => {
-      const value = this.resolveValue(key, variables);
+    return template.replace(
+      blockRegex,
+      (_match, key: string, content: string) => {
+        const value = this.resolveValue(key, variables);
 
-      // 数组：对每个元素重复 content
-      if (Array.isArray(value)) {
-        if (value.length === 0) return '';
-        return value
-          .map((item) => {
-            if (typeof item === 'object' && item !== null) {
-              // 嵌套对象：将其属性展开为变量
-              return this.processVariables(content, { ...variables, ...item });
-            }
-            return this.processVariables(content, {
-              ...variables,
-              '.': String(item),
-            });
-          })
-          .join('');
-      }
+        // 数组：对每个元素重复 content
+        if (Array.isArray(value)) {
+          if (value.length === 0) return '';
+          return value
+            .map((item) => {
+              if (typeof item === 'object' && item !== null) {
+                // 嵌套对象：将其属性展开为变量
+                return this.processVariables(content, {
+                  ...variables,
+                  ...item,
+                });
+              }
+              return this.processVariables(content, {
+                ...variables,
+                '.': String(item),
+              });
+            })
+            .join('');
+        }
 
-      // 布尔 / truthy 检查
-      if (value) {
-        return content;
-      }
-      return '';
-    });
+        // 布尔 / truthy 检查
+        if (value) {
+          return content;
+        }
+        return '';
+      },
+    );
   }
 
   /**
@@ -138,14 +143,17 @@ export class SkillPromptService {
   ): string {
     const blockRegex = /\{\{\^(\w+(?:\.\w+)*)\}\}([\s\S]*?)\{\{\/\1\}\}/g;
 
-    return template.replace(blockRegex, (_match, key: string, content: string) => {
-      const value = this.resolveValue(key, variables);
+    return template.replace(
+      blockRegex,
+      (_match, key: string, content: string) => {
+        const value = this.resolveValue(key, variables);
 
-      if (!value || (Array.isArray(value) && value.length === 0)) {
-        return content;
-      }
-      return '';
-    });
+        if (!value || (Array.isArray(value) && value.length === 0)) {
+          return content;
+        }
+        return '';
+      },
+    );
   }
 
   /**
@@ -158,47 +166,47 @@ export class SkillPromptService {
     // 匹配 {{key}} 或 {{key|default value}}
     const varRegex = /\{\{(\w+(?:\.\w+)*)(?:\|([^}]*))?\}\}/g;
 
-    return template.replace(varRegex, (_match, key: string, defaultValue?: string) => {
-      const value = this.resolveValue(key, variables);
+    return template.replace(
+      varRegex,
+      (_match, key: string, defaultValue?: string) => {
+        const value = this.resolveValue(key, variables);
 
-      if (value !== undefined && value !== null) {
-        // 数组 → 逗号分隔字符串
-        if (Array.isArray(value)) {
-          return value.join(', ');
+        if (value !== undefined && value !== null) {
+          // 数组 → 逗号分隔字符串
+          if (Array.isArray(value)) {
+            return value.join(', ');
+          }
+          // 对象 → JSON
+          if (typeof value === 'object') {
+            return JSON.stringify(value, null, 2);
+          }
+          return String(value);
         }
-        // 对象 → JSON
-        if (typeof value === 'object') {
-          return JSON.stringify(value, null, 2);
+
+        // 有默认值则使用默认值
+        if (defaultValue !== undefined) {
+          return defaultValue;
         }
-        return String(value);
-      }
 
-      // 有默认值则使用默认值
-      if (defaultValue !== undefined) {
-        return defaultValue;
-      }
-
-      // 未匹配到 → 保留原始占位符（避免误删）
-      this.logger.debug(`Prompt 变量未匹配: {{${key}}}`);
-      return _match;
-    });
+        // 未匹配到 → 保留原始占位符（避免误删）
+        this.logger.debug(`Prompt 变量未匹配: {{${key}}}`);
+        return _match;
+      },
+    );
   }
 
   /**
    * 解析嵌套属性值（支持 a.b.c 点号访问）
    */
-  private resolveValue(
-    key: string,
-    variables: SkillPromptVariables,
-  ): any {
+  private resolveValue(key: string, variables: SkillPromptVariables): any {
     const parts = key.split('.');
-    let current: any = variables;
+    let current: unknown = variables;
 
     for (const part of parts) {
       if (current === undefined || current === null) {
         return undefined;
       }
-      current = current[part];
+      current = (current as Record<string, unknown>)[part];
     }
 
     return current;
@@ -231,7 +239,7 @@ export class SkillPromptService {
   ): string[] {
     const names = this.extractVariableNames(template);
     return names.filter((name) => {
-      const value = this.resolveValue(name, variables);
+      const value: unknown = this.resolveValue(name, variables);
       return value === undefined || value === null;
     });
   }
@@ -250,7 +258,7 @@ export class SkillPromptService {
    *   !`bash scripts/check_env.sh`
    *   !`cat references/EXTRA_RULES.md`
    *
-   * 命令以 Skill 目录（dirPath）作为 cwd 执行，并注入环境变量。
+   * 命令以 Skill 目录（dirPath）作为 cwd 执行，通过安全沙箱注入环境变量。
    * 命令超时默认 30 秒。执行失败时替换为错误提示文本（不中止整体流程）。
    *
    * @param prompt   变量插值后的 Prompt 文本
@@ -283,22 +291,22 @@ export class SkillPromptService {
       `发现 ${matches.length} 个 !\`command\` 脚本注入: ${matches.map((m) => m.command).join(', ')}`,
     );
 
-    // 并行执行所有命令
+    // 并行执行所有命令（通过安全沙箱）
     const results = await Promise.all(
       matches.map(async ({ fullMatch, command }) => {
         try {
-          const output = await this.executeCommand(command, dirPath, env);
+          const output = await this.sandbox.executeCommand(command, dirPath, {
+            env,
+          });
           this.logger.log(
             `脚本注入执行成功: ${command} → ${output.length} chars`,
           );
           return { fullMatch, output };
         } catch (err: any) {
-          this.logger.warn(
-            `脚本注入执行失败: ${command} → ${err.message}`,
-          );
+          this.logger.warn(`脚本注入执行失败: ${command} → ${err?.message}`);
           return {
             fullMatch,
-            output: `[⚠️ 脚本执行失败: ${command}]\n错误: ${err.message}`,
+            output: `[⚠️ 脚本执行失败: ${command}]\n错误: ${err?.message}`,
           };
         }
       }),
@@ -311,65 +319,5 @@ export class SkillPromptService {
     }
 
     return result;
-  }
-
-  /** 是否开启 Skill 脚本调试模式（环境变量 SKILL_DEBUG=true） */
-  private get isDebugMode(): boolean {
-    return process.env.SKILL_DEBUG === 'true';
-  }
-
-  /**
-   * 执行单条命令并返回 stdout
-   *
-   * @param command  要执行的命令（如 `node scripts/test.js`）
-   * @param cwd      工作目录
-   * @param env      额外环境变量
-   * @param timeout  超时（毫秒），默认 30 秒
-   */
-  private executeCommand(
-    command: string,
-    cwd: string,
-    env: Record<string, string> = {},
-    timeout = 30_000,
-  ): Promise<string> {
-    return new Promise((resolve, reject) => {
-      exec(
-        command,
-        {
-          cwd,
-          env: { ...process.env, ...env },
-          timeout,
-          maxBuffer: 1024 * 1024, // 1MB
-        },
-        (error, stdout, stderr) => {
-          if (error) {
-            const errMsg = stderr?.trim() || error.message;
-            reject(new Error(`exit=${error.code ?? 1}: ${errMsg}`));
-            return;
-          }
-          if (stderr?.trim()) {
-            this.logger.debug(`脚本 stderr: ${stderr.trim()}`);
-          }
-
-          const output = stdout?.trim() || '';
-
-          // 调试模式下将脚本 stdout 也输出到 NestJS 控制台
-          if (this.isDebugMode && output) {
-            const formattedLines = output
-              .split('\n')
-              .map((line) => `│ ${line}`)
-              .join('\n');
-            this.logger.warn(
-              `[SKILL_DEBUG] 脚本输出 ↓\n` +
-                `┌─── ${command} ───\n` +
-                `${formattedLines}\n` +
-                `└${'─'.repeat(40)}`,
-            );
-          }
-
-          resolve(output);
-        },
-      );
-    });
   }
 }

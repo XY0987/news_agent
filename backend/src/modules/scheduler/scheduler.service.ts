@@ -92,7 +92,9 @@ export class SchedulerService {
       this.todayGithubExecutedUsers.clear();
       this.todaySkillExecutedUsers.clear();
       this.currentDate = todayStr;
-      this.logger.log(`日期切换至 ${todayStr}，重置已执行用户列表（时区: Asia/Shanghai）`);
+      this.logger.log(
+        `日期切换至 ${todayStr}，重置已执行用户列表（时区: Asia/Shanghai）`,
+      );
     }
 
     try {
@@ -257,7 +259,11 @@ export class SchedulerService {
           // 在 notifyTime 后的 10 分钟窗口内触发
           const notifyMinutes = notifyH * 60 + notifyM;
           const currentMinutes = curH * 60 + curM;
-          if (currentMinutes < notifyMinutes || currentMinutes >= notifyMinutes + 10) continue;
+          if (
+            currentMinutes < notifyMinutes ||
+            currentMinutes >= notifyMinutes + 10
+          )
+            continue;
 
           // 检查是否今日已执行（通过 todaySkillExecuted 集合防重复）
           const skillUserKey = `${skill.id}:${user.id}`;
@@ -358,7 +364,9 @@ export class SchedulerService {
    * 流程：采集 GitHub 热点 → AI 摘要+评分 → 独立邮件推送
    * public 以支持手动触发
    */
-  async executeGithubTrendingForUser(user: UserEntity): Promise<{ success: boolean; message: string; repoCount?: number }> {
+  async executeGithubTrendingForUser(
+    user: UserEntity,
+  ): Promise<{ success: boolean; message: string; repoCount?: number }> {
     const userId = user.id;
     this.logger.log(`[GitHub] 开始为用户 ${user.name} 采集 GitHub 热点`);
 
@@ -370,10 +378,11 @@ export class SchedulerService {
       );
 
       if (githubSources.length === 0) {
-        this.logger.log(
-          `[GitHub] 用户 ${user.name} 没有 GitHub 数据源，跳过`,
-        );
-        return { success: false, message: '没有配置 GitHub 数据源，请先在数据源页面添加' };
+        this.logger.log(`[GitHub] 用户 ${user.name} 没有 GitHub 数据源，跳过`);
+        return {
+          success: false,
+          message: '没有配置 GitHub 数据源，请先在数据源页面添加',
+        };
       }
 
       // 2. 采集 GitHub 热点
@@ -383,18 +392,13 @@ export class SchedulerService {
       const collectResults =
         await this.collectorService.collectGithubByUser(userId);
 
-      const totalNew = collectResults.reduce(
-        (sum, r) => sum + r.newSaved,
-        0,
-      );
+      const totalNew = collectResults.reduce((sum, r) => sum + r.newSaved, 0);
       this.logger.log(
         `[GitHub] 用户 ${user.name}: 采集完成，新增 ${totalNew} 条`,
       );
 
       if (totalNew === 0) {
-        this.logger.log(
-          `[GitHub] 用户 ${user.name}: 无新增内容，跳过推送`,
-        );
+        this.logger.log(`[GitHub] 用户 ${user.name}: 无新增内容，跳过推送`);
         return { success: true, message: '采集完成但无新增内容', repoCount: 0 };
       }
 
@@ -408,9 +412,7 @@ export class SchedulerService {
 
       const contentIds: string[] = filterResult.passedIds || [];
       if (contentIds.length === 0) {
-        this.logger.log(
-          `[GitHub] 用户 ${user.name}: 过滤后无内容，跳过推送`,
-        );
+        this.logger.log(`[GitHub] 用户 ${user.name}: 过滤后无内容，跳过推送`);
         return { success: true, message: '过滤去重后无新内容', repoCount: 0 };
       }
 

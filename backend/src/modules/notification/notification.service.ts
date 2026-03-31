@@ -91,7 +91,12 @@ export class NotificationService {
     userId: string;
     contentIds: string[];
     agentNote?: string;
-  }): Promise<{ success: boolean; message: string; digestId: string; channels: Record<string, any> }> {
+  }): Promise<{
+    success: boolean;
+    message: string;
+    digestId: string;
+    channels: Record<string, any>;
+  }> {
     const { userId, contentIds, agentNote } = params;
 
     const user = await this.userRepo.findOneBy({ id: userId });
@@ -104,11 +109,16 @@ export class NotificationService {
     const contents = await this.contentRepo.findBy({ id: In(contentIds) });
 
     // 按 Source 类型分流：GitHub 内容复用 sendGithubTrending，文章走 sendViaEmail
-    const sourceIds = [...new Set(contents.map((c) => c.sourceId).filter(Boolean))];
-    const sources = sourceIds.length > 0
-      ? await this.sourceRepo.findBy({ id: In(sourceIds) })
-      : [];
-    const githubSourceIds = new Set(sources.filter((s) => s.type === 'github').map((s) => s.id));
+    const sourceIds = [
+      ...new Set(contents.map((c) => c.sourceId).filter(Boolean)),
+    ];
+    const sources =
+      sourceIds.length > 0
+        ? await this.sourceRepo.findBy({ id: In(sourceIds) })
+        : [];
+    const githubSourceIds = new Set(
+      sources.filter((s) => s.type === 'github').map((s) => s.id),
+    );
 
     const articleContentIds = contentIds.filter((id) => {
       const c = contents.find((ct) => ct.id === id);
@@ -139,7 +149,12 @@ export class NotificationService {
     }
 
     // 渲染 Markdown 推送内容
-    const rendered = this.renderDigest(contents, scoreMap, interactionMap, agentNote);
+    const rendered = this.renderDigest(
+      contents,
+      scoreMap,
+      interactionMap,
+      agentNote,
+    );
 
     // 保存推送记录
     const digest = this.digestRepo.create({
@@ -155,20 +170,35 @@ export class NotificationService {
 
     // 1. 文章邮件
     if (articleContentIds.length > 0) {
-      const articleContents = contents.filter((c) => !githubSourceIds.has(c.sourceId));
+      const articleContents = contents.filter(
+        (c) => !githubSourceIds.has(c.sourceId),
+      );
       channelResults.email = await this.sendViaEmail(
-        user, articleContents, scoreMap, interactionMap, agentNote,
+        user,
+        articleContents,
+        scoreMap,
+        interactionMap,
+        agentNote,
       );
     }
 
     // 2. GitHub 邮件（复用已有的 sendGithubTrending）
     if (githubContentIds.length > 0) {
-      const ghResult = await this.sendGithubTrending({ userId, contentIds: githubContentIds, agentNote });
-      channelResults.github = { success: ghResult.success, message: ghResult.message };
+      const ghResult = await this.sendGithubTrending({
+        userId,
+        contentIds: githubContentIds,
+        agentNote,
+      });
+      channelResults.github = {
+        success: ghResult.success,
+        message: ghResult.message,
+      };
     }
 
     // 更新推送时间
-    const anySuccess = Object.values(channelResults).some((r: any) => r.success);
+    const anySuccess = Object.values(channelResults).some(
+      (r: any) => r.success,
+    );
     if (anySuccess) {
       savedDigest.sentAt = new Date();
       await this.digestRepo.save(savedDigest);
@@ -249,7 +279,9 @@ export class NotificationService {
   /**
    * 发送测试邮件
    */
-  async sendTestEmail(email: string): Promise<{ success: boolean; error?: string }> {
+  async sendTestEmail(
+    email: string,
+  ): Promise<{ success: boolean; error?: string }> {
     if (!this.emailChannel.isAvailable()) {
       return { success: false, error: 'SMTP 未配置' };
     }
@@ -272,7 +304,9 @@ export class NotificationService {
   /**
    * 检查通知渠道状态
    */
-  async getChannelStatus(): Promise<Record<string, { available: boolean; configured: boolean }>> {
+  async getChannelStatus(): Promise<
+    Record<string, { available: boolean; configured: boolean }>
+  > {
     return {
       email: {
         available: this.emailChannel.isAvailable(),
@@ -381,10 +415,11 @@ export class NotificationService {
     // 按 star 数排序
     items.sort((a, b) => b.stars - a.stars);
 
-    const emailResult = await this.emailChannel.sendGithubTrendingEmail(
-      email,
-      { date, agentNote, items },
-    );
+    const emailResult = await this.emailChannel.sendGithubTrendingEmail(email, {
+      date,
+      agentNote,
+      items,
+    });
 
     if (emailResult.success) {
       savedDigest.sentAt = new Date();

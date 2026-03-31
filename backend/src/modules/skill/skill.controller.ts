@@ -3,6 +3,7 @@ import {
   Post,
   Get,
   Put,
+  Delete,
   Param,
   Body,
   Query,
@@ -10,9 +11,16 @@ import {
   HttpStatus,
   Logger,
 } from '@nestjs/common';
-import { IsNotEmpty, IsString, IsOptional, IsObject } from 'class-validator';
+import {
+  IsNotEmpty,
+  IsString,
+  IsOptional,
+  IsObject,
+  Matches,
+} from 'class-validator';
 import { SkillService } from './skill.service.js';
 import { SkillExecutorService } from './skill-executor.service.js';
+import { SkillGitService } from './skill-git.service.js';
 import { AgentService } from '../agent/agent.service.js';
 
 // ==================== DTO ====================
@@ -53,6 +61,21 @@ class UpdateSettingsDto {
   settings: Record<string, any>;
 }
 
+class InstallSkillDto {
+  @IsString()
+  @IsNotEmpty()
+  @Matches(/^https:\/\//, { message: 'gitUrl 必须以 https:// 开头' })
+  gitUrl: string;
+
+  @IsOptional()
+  @IsString()
+  branch?: string;
+
+  @IsOptional()
+  @IsString()
+  directory?: string;
+}
+
 /**
  * Skill 管理接口
  *
@@ -64,6 +87,9 @@ class UpdateSettingsDto {
  * - POST   /api/skills/:skillId/disable 禁用 Skill
  * - PUT    /api/skills/:skillId/settings 更新 Skill 配置
  * - POST   /api/skills/reload          热重载 Skill（管理员）
+ * - POST   /api/skills/install         从 Git 仓库安装 Skill
+ * - DELETE /api/skills/:skillId/uninstall 卸载 Git Skill
+ * - POST   /api/skills/:skillId/update  更新 Git Skill
  * - GET    /api/skills/executions      获取执行记录
  * - GET    /api/skills/executions/:id  获取执行详情
  */
@@ -75,6 +101,7 @@ export class SkillController {
     private readonly skillService: SkillService,
     private readonly executor: SkillExecutorService,
     private readonly agentService: AgentService,
+    private readonly gitService: SkillGitService,
   ) {}
 
   // ==================== 列表与详情 ====================
@@ -84,9 +111,7 @@ export class SkillController {
    * 获取用户可见的所有 Skill 列表
    */
   @Get()
-  async listSkills(
-    @Query('userId') userId: string,
-  ) {
+  async listSkills(@Query('userId') userId: string) {
     if (!userId) {
       throw new HttpException('userId is required', HttpStatus.BAD_REQUEST);
     }
@@ -231,10 +256,7 @@ export class SkillController {
     @Body() body: DisableSkillDto,
   ) {
     try {
-      const config = await this.skillService.disableSkill(
-        body.userId,
-        skillId,
-      );
+      const config = await this.skillService.disableSkill(body.userId, skillId);
 
       return {
         success: true,
@@ -299,13 +321,8 @@ export class SkillController {
    *          → markExecutionSuccess / markExecutionFailed
    */
   @Post(':skillId/run')
-  async runSkill(
-    @Param('skillId') skillId: string,
-    @Body() body: RunSkillDto,
-  ) {
-    this.logger.log(
-      `手动触发 Skill 执行: ${skillId}, userId=${body.userId}`,
-    );
+  async runSkill(@Param('skillId') skillId: string, @Body() body: RunSkillDto) {
+    this.logger.log(`手动触发 Skill 执行: ${skillId}, userId=${body.userId}`);
 
     let executionId: string | undefined;
 
@@ -439,5 +456,140 @@ export class SkillController {
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
+  }
+
+  // ==================== Git Skill 安装管理 ====================
+
+  /**
+   * POST /api/skills/install
+   * 从 Git 仓库安装 Skill
+   *
+   * 用户提供 gitUrl、branch（可选，默认 main）、directory（可选，仓库内子目录）
+   * 系统自动 clone 到 skills/ 目录，解析并注册
+   */
+  @Post('install')
+  async installSkill(@Body() body: InstallSkillDto) {
+    this.logger.log(
+      `安装 Skill: ${body.gitUrl} (branch=${body.branch || 'main'}, dir=${body.directory || '/'})`,
+    );
+
+    try {
+      const result = await this.gitService.install({
+        gitUrl: body.gitUrl,
+        branch: body.branch,
+        directory: body.directory,
+      });
+
+      if (!result.success) {
+        throw new HttpException(
+          { success: false, message: result.message },
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+
+      return {
+        success: true,
+        data: {
+          skillId: result.skillId,
+          skillName: result.skillName,
+          installedPath: result.installedPath,
+        },
+        message: result.message,
+      };
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        {
+          success: false,
+          message: `安装失败: ${(error as Error).message}`,
+        },
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
+   * DELETE /api/skills/:skillId/uninstall
+   * 卸载通过 Git 安装的 Skill
+   */
+  @Delete(':skillId/uninstall')
+  async uninstallSkill(@Param('skillId') skillId: string) {
+    this.logger.log(`卸载 Skill: ${skillId}`);
+
+    try {
+      const result = await this.gitService.uninstall(skillId);
+
+      if (!result.success) {
+        throw new HttpException(
+          { success: false, message: result.message },
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+
+      return {
+        success: true,
+        message: result.message,
+      };
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        {
+          success: false,
+          message: `卸载失败: ${(error as Error).message}`,
+        },
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
+   * POST /api/skills/:skillId/update
+   * 更新通过 Git 安装的 Skill（重新 clone）
+   */
+  @Post(':skillId/update')
+  async updateSkill(@Param('skillId') skillId: string) {
+    this.logger.log(`更新 Skill: ${skillId}`);
+
+    try {
+      const result = await this.gitService.update(skillId);
+
+      if (!result.success) {
+        throw new HttpException(
+          { success: false, message: result.message },
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+
+      return {
+        success: true,
+        data: {
+          skillId: result.skillId,
+          skillName: result.skillName,
+        },
+        message: result.message,
+      };
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        {
+          success: false,
+          message: `更新失败: ${(error as Error).message}`,
+        },
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
+   * GET /api/skills/:skillId/source
+   * 获取 Skill 的 Git 来源信息
+   */
+  @Get(':skillId/source')
+  getSkillSource(@Param('skillId') skillId: string) {
+    const source = this.gitService.getSourceInfo(skillId);
+    return {
+      success: true,
+      data: source,
+    };
   }
 }

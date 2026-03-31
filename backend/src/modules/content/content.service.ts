@@ -92,10 +92,8 @@ export class ContentService {
         title: c.title,
         url: c.url,
         author: c.author,
-        sourceName:
-          c.source?.name || String(meta.sourceName ?? ''),
-        sourceType:
-          c.source?.type || String(meta.sourceType ?? ''),
+        sourceName: c.source?.name || String(meta.sourceName ?? ''),
+        sourceType: c.source?.type || String(meta.sourceType ?? ''),
         publishedAt: c.publishedAt,
         score: sc?.finalScore ?? null,
         scoreBreakdown: sc?.scoreBreakdown ?? null,

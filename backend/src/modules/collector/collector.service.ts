@@ -239,7 +239,11 @@ export class CollectorService {
    */
   private async saveContents(
     rawContents: RawContent[],
-  ): Promise<{ newSaved: number; duplicatesSkipped: number; savedIds: string[] }> {
+  ): Promise<{
+    newSaved: number;
+    duplicatesSkipped: number;
+    savedIds: string[];
+  }> {
     let newSaved = 0;
     let duplicatesSkipped = 0;
     const savedIds: string[] = [];
@@ -318,9 +322,7 @@ export class CollectorService {
     return Math.abs(hash).toString(16).padStart(8, '0');
   }
 
-  private groupByType(
-    sources: SourceEntity[],
-  ): Record<string, SourceEntity[]> {
+  private groupByType(sources: SourceEntity[]): Record<string, SourceEntity[]> {
     const grouped: Record<string, SourceEntity[]> = {};
     for (const s of sources) {
       if (!grouped[s.type]) grouped[s.type] = [];

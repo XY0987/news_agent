@@ -7,7 +7,10 @@ import { SkillRegistryService } from './skill-registry.service.js';
 import { SkillPromptService } from './skill-prompt.service.js';
 import { SkillConfigEntity } from '../../common/database/entities/skill-config.entity.js';
 import type { SkillRegistryEntry } from './skill.types.js';
-import type { OpenAIToolDefinition, ToolExecutor } from '../agent/agent.types.js';
+import type {
+  OpenAIToolDefinition,
+  ToolExecutor,
+} from '../agent/agent.types.js';
 
 /**
  * 增强结果：应用到现有流程 config 的最终产物
@@ -149,9 +152,7 @@ export class SkillEnhancerService {
       .getMany();
 
     const enabledSet = new Set(
-      configs
-        .filter((c) => c.status === 'enabled')
-        .map((c) => c.skillId),
+      configs.filter((c) => c.status === 'enabled').map((c) => c.skillId),
     );
 
     return entries.filter((e) => enabledSet.has(e.skill.id));

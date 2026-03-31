@@ -121,7 +121,9 @@ export class AgentController {
       throw new HttpException('userId is required', HttpStatus.BAD_REQUEST);
     }
 
-    this.logger.log(`手动触发 AI 分析: userId=${body.userId}, daysWindow=${body.daysWindow || 1}`);
+    this.logger.log(
+      `手动触发 AI 分析: userId=${body.userId}, daysWindow=${body.daysWindow || 1}`,
+    );
 
     try {
       const result = await this.agentService.runAnalysisOnly(body.userId, {
@@ -210,10 +212,7 @@ export class AgentController {
   @Get('logs/:sessionId')
   async getSessionLogs(@Param('sessionId') sessionId: string) {
     if (!sessionId) {
-      throw new HttpException(
-        'sessionId is required',
-        HttpStatus.BAD_REQUEST,
-      );
+      throw new HttpException('sessionId is required', HttpStatus.BAD_REQUEST);
     }
 
     const logs = await this.agentService.getSessionLogs(sessionId);

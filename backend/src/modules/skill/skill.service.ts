@@ -44,9 +44,7 @@ export class SkillService {
    * 合并注册表信息 + 用户配置状态
    * 标准格式下 frontmatter 只有 name + description
    */
-  async listSkills(
-    userId: string,
-  ): Promise<
+  async listSkills(userId: string): Promise<
     Array<{
       id: string;
       name: string;
@@ -64,9 +62,7 @@ export class SkillService {
     const configs = await this.configRepo.find({
       where: { userId },
     });
-    const configMap = new Map(
-      configs.map((c) => [c.skillId, c]),
-    );
+    const configMap = new Map(configs.map((c) => [c.skillId, c]));
 
     return entries.map((entry) => {
       const skill = entry.skill;
@@ -76,9 +72,7 @@ export class SkillService {
         id: skill.id,
         name: skill.frontmatter.name,
         description: skill.frontmatter.description,
-        status: config
-          ? config.status
-          : ('not_configured' as const),
+        status: config ? config.status : ('not_configured' as const),
         settings: config?.settings,
       };
     });
@@ -129,9 +123,7 @@ export class SkillService {
       references: skill.references,
       scripts: skill.scripts,
       userConfig: {
-        status: config
-          ? config.status
-          : 'not_configured',
+        status: config ? config.status : 'not_configured',
         settings: config?.settings || {},
       },
       recentExecutions: executions.map((e) => ({
@@ -179,9 +171,7 @@ export class SkillService {
     }
 
     const saved = await this.configRepo.save(config);
-    this.logger.log(
-      `用户 ${userId} 启用 Skill: ${skillId}`,
-    );
+    this.logger.log(`用户 ${userId} 启用 Skill: ${skillId}`);
     return saved;
   }
 
@@ -209,9 +199,7 @@ export class SkillService {
 
     config.status = 'disabled';
     const saved = await this.configRepo.save(config);
-    this.logger.log(
-      `用户 ${userId} 禁用 Skill: ${skillId}`,
-    );
+    this.logger.log(`用户 ${userId} 禁用 Skill: ${skillId}`);
     return saved;
   }
 

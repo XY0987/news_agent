@@ -55,9 +55,8 @@ export class GithubCollector extends BaseCollector {
           'collector.github.trendingReposApiUrl',
         ) ?? 'https://trendingrepos.glup3.dev',
       frontendTopicsUrl:
-        this.configService.get<string>(
-          'collector.github.frontendTopicsUrl',
-        ) ?? 'https://github.com/topics/frontend',
+        this.configService.get<string>('collector.github.frontendTopicsUrl') ??
+        'https://github.com/topics/frontend',
       timeout:
         this.configService.get<number>('collector.github.timeout') ?? 30000,
       maxPerSource:
@@ -190,7 +189,9 @@ export class GithubCollector extends BaseCollector {
       case 'all':
         return this.collectAll();
       default:
-        this.logger.warn(`未知的 GitHub 标识: ${identifier}，尝试作为趋势页获取`);
+        this.logger.warn(
+          `未知的 GitHub 标识: ${identifier}，尝试作为趋势页获取`,
+        );
         return this.fetchGithubTrending('monthly');
     }
   }
@@ -218,9 +219,7 @@ export class GithubCollector extends BaseCollector {
           }
         }
       } catch (error) {
-        this.logger.error(
-          `采集子源失败: ${(error as Error).message}`,
-        );
+        this.logger.error(`采集子源失败: ${(error as Error).message}`);
       }
       await this.delay(this.config.requestDelay);
     }
@@ -247,10 +246,7 @@ export class GithubCollector extends BaseCollector {
     }
   }
 
-  private parseGithubTrending(
-    html: string,
-    since: string,
-  ): GithubRepoInfo[] {
+  private parseGithubTrending(html: string, since: string): GithubRepoInfo[] {
     const $ = cheerio.load(html);
     const repos: GithubRepoInfo[] = [];
 
@@ -382,7 +378,11 @@ export class GithubCollector extends BaseCollector {
         const description = $el.find('p').first().text().trim();
 
         // Star 数
-        const starText = $el.find('a[href*="/stargazers"]').text().trim().replace(/,/g, '');
+        const starText = $el
+          .find('a[href*="/stargazers"]')
+          .text()
+          .trim()
+          .replace(/,/g, '');
         const stars = parseInt(starText, 10) || 0;
 
         // 编程语言
@@ -411,9 +411,7 @@ export class GithubCollector extends BaseCollector {
       }
     });
 
-    this.logger.log(
-      `GitHub Topics (${topic}): 解析到 ${repos.length} 个仓库`,
-    );
+    this.logger.log(`GitHub Topics (${topic}): 解析到 ${repos.length} 个仓库`);
     return repos;
   }
 

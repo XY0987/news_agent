@@ -65,9 +65,7 @@ export class SkillParserService {
       const { frontmatter, prompt } = this.parseFrontmatterAndContent(content);
 
       if (!frontmatter) {
-        this.logger.error(
-          `SKILL.md frontmatter 解析失败: ${skillMdPath}`,
-        );
+        this.logger.error(`SKILL.md frontmatter 解析失败: ${skillMdPath}`);
         return null;
       }
 
@@ -81,9 +79,7 @@ export class SkillParserService {
       }
 
       // 扫描子目录
-      const scripts = this.listDirFiles(
-        path.join(skillDirPath, 'scripts'),
-      );
+      const scripts = this.listDirFiles(path.join(skillDirPath, 'scripts'));
       const references = this.listDirFiles(
         path.join(skillDirPath, 'references'),
       );

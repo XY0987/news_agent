@@ -19,6 +19,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Play,
   RefreshCw,
@@ -30,6 +32,9 @@ import {
   Loader2,
   Settings2,
   History,
+  Download,
+  Trash2,
+  GitBranch,
 } from "lucide-react";
 import type { Skill, SkillDetail, SkillExecution } from "@/types";
 import { formatDate } from "@/utils";
@@ -127,7 +132,10 @@ function SkillCard({
     <Card className="group hover:shadow-md transition-shadow cursor-pointer">
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between">
-          <div className="flex items-center gap-3" onClick={() => onDetail(skill.id)}>
+          <div
+            className="flex items-center gap-3"
+            onClick={() => onDetail(skill.id)}
+          >
             <span className="text-2xl">{skill.icon || "🔧"}</span>
             <div>
               <CardTitle className="text-base">{skill.name}</CardTitle>
@@ -150,7 +158,9 @@ function SkillCard({
           <div className="flex items-center gap-2">
             <Badge variant="outline" className="text-xs">
               <TriggerIcon type={skill.triggerType} />
-              <span className="ml-1">{getTriggerTypeName(skill.triggerType)}</span>
+              <span className="ml-1">
+                {getTriggerTypeName(skill.triggerType)}
+              </span>
             </Badge>
             {skill.tags?.slice(0, 2).map((tag) => (
               <Badge key={tag} variant="secondary" className="text-xs">
@@ -228,7 +238,9 @@ function SkillDetailDialog({
           <TabsContent value="info" className="space-y-4 mt-4">
             <div>
               <h4 className="text-sm font-medium mb-2">描述</h4>
-              <p className="text-sm text-muted-foreground">{detail.description}</p>
+              <p className="text-sm text-muted-foreground">
+                {detail.description}
+              </p>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
@@ -262,7 +274,11 @@ function SkillDetailDialog({
                 <h4 className="text-sm font-medium mb-2">使用工具</h4>
                 <div className="flex flex-wrap gap-1.5">
                   {detail.tools.include.map((tool) => (
-                    <Badge key={tool} variant="secondary" className="text-xs font-mono">
+                    <Badge
+                      key={tool}
+                      variant="secondary"
+                      className="text-xs font-mono"
+                    >
                       {tool}
                     </Badge>
                   ))}
@@ -299,10 +315,14 @@ function SkillDetailDialog({
           </TabsContent>
 
           <TabsContent value="settings" className="mt-4">
-            {detail.settingDefinitions && detail.settingDefinitions.length > 0 ? (
+            {detail.settingDefinitions &&
+            detail.settingDefinitions.length > 0 ? (
               <div className="space-y-4">
                 {detail.settingDefinitions.map((def) => (
-                  <div key={def.key} className="flex items-center justify-between">
+                  <div
+                    key={def.key}
+                    className="flex items-center justify-between"
+                  >
                     <div>
                       <p className="text-sm font-medium">{def.label}</p>
                       <p className="text-xs text-muted-foreground">
@@ -310,12 +330,12 @@ function SkillDetailDialog({
                       </p>
                     </div>
                     <div className="text-sm text-right">
-                      <span className="text-muted-foreground">
-                        当前值:{" "}
-                      </span>
+                      <span className="text-muted-foreground">当前值: </span>
                       <span className="font-medium">
                         {String(
-                          detail.userConfig.settings[def.key] ?? def.default ?? "未设置"
+                          detail.userConfig.settings[def.key] ??
+                            def.default ??
+                            "未设置"
                         )}
                       </span>
                     </div>
@@ -371,6 +391,125 @@ function SkillDetailDialog({
   );
 }
 
+// ==================== 安装 Skill 弹窗 ====================
+
+function InstallSkillDialog({
+  open,
+  onClose,
+  onInstalled,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onInstalled: () => void;
+}) {
+  const { installSkill, installing } = useSkillStore();
+  const [gitUrl, setGitUrl] = useState("");
+  const [branch, setBranch] = useState("main");
+  const [directory, setDirectory] = useState("");
+  const [error, setError] = useState("");
+
+  const handleInstall = async () => {
+    if (!gitUrl.trim()) {
+      setError("请输入 Git 仓库地址");
+      return;
+    }
+    if (!gitUrl.startsWith("https://")) {
+      setError("只支持 HTTPS 协议的 Git 地址");
+      return;
+    }
+    setError("");
+
+    try {
+      await installSkill({
+        gitUrl: gitUrl.trim(),
+        branch: branch.trim() || "main",
+        directory: directory.trim() || undefined,
+      });
+      // 安装成功
+      setGitUrl("");
+      setBranch("main");
+      setDirectory("");
+      onClose();
+      onInstalled();
+    } catch (e: unknown) {
+      setError((e as Error).message || "安装失败");
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <GitBranch className="h-5 w-5" />从 Git 安装 Skill
+          </DialogTitle>
+          <DialogDescription>
+            填写 Git 仓库地址，系统会自动 clone 并注册 Skill
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 mt-4">
+          <div className="space-y-2">
+            <Label htmlFor="gitUrl">Git 仓库地址 *</Label>
+            <Input
+              id="gitUrl"
+              placeholder="https://github.com/user/skill-repo.git"
+              value={gitUrl}
+              onChange={(e) => setGitUrl(e.target.value)}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="branch">分支</Label>
+              <Input
+                id="branch"
+                placeholder="main"
+                value={branch}
+                onChange={(e) => setBranch(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="directory">仓库内目录</Label>
+              <Input
+                id="directory"
+                placeholder="skills/my-skill（可选）"
+                value={directory}
+                onChange={(e) => setDirectory(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <p className="text-xs text-muted-foreground">
+            仓库内目录：如果 SKILL.md
+            不在仓库根目录，请填写子目录路径。留空表示仓库根目录。
+          </p>
+
+          {error && (
+            <div className="text-sm text-destructive bg-destructive/10 rounded-md p-3">
+              {error}
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={onClose} disabled={installing}>
+              取消
+            </Button>
+            <Button onClick={handleInstall} disabled={installing}>
+              {installing ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4 mr-2" />
+              )}
+              {installing ? "安装中..." : "安装"}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ==================== 主页面 ====================
 
 export function SkillsPage() {
@@ -390,6 +529,7 @@ export function SkillsPage() {
   } = useSkillStore();
 
   const [detailOpen, setDetailOpen] = useState(false);
+  const [installOpen, setInstallOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("all");
 
   useEffect(() => {
@@ -428,10 +568,10 @@ export function SkillsPage() {
     activeTab === "all"
       ? skills
       : activeTab === "enabled"
-        ? skills.filter((s) => s.status === "enabled")
-        : activeTab === "schedule"
-          ? skills.filter((s) => s.triggerType === "schedule")
-          : skills.filter((s) => s.triggerType === "manual");
+      ? skills.filter((s) => s.status === "enabled")
+      : activeTab === "schedule"
+      ? skills.filter((s) => s.triggerType === "schedule")
+      : skills.filter((s) => s.triggerType === "manual");
 
   return (
     <div className="space-y-6">
@@ -443,10 +583,16 @@ export function SkillsPage() {
             管理 Agent 的可插拔技能，为你的信息管家扩展新能力
           </p>
         </div>
-        <Button variant="outline" onClick={handleReload}>
-          <RefreshCw className="h-4 w-4 mr-2" />
-          刷新
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setInstallOpen(true)}>
+            <Download className="h-4 w-4 mr-2" />
+            安装 Skill
+          </Button>
+          <Button variant="outline" onClick={handleReload}>
+            <RefreshCw className="h-4 w-4 mr-2" />
+            刷新
+          </Button>
+        </div>
       </div>
 
       {/* 统计卡片 */}
@@ -501,7 +647,8 @@ export function SkillsPage() {
             <div className="text-center py-12 text-muted-foreground">
               <p className="text-lg mb-2">暂无 Skills</p>
               <p className="text-sm">
-                在 <code className="bg-muted px-1 rounded">backend/skills/</code>{" "}
+                在{" "}
+                <code className="bg-muted px-1 rounded">backend/skills/</code>{" "}
                 目录中创建 SKILL.md 来添加新技能
               </p>
             </div>
@@ -530,6 +677,13 @@ export function SkillsPage() {
         onRun={() => selectedSkill && handleRun(selectedSkill.id)}
         loading={loading}
         executing={executing}
+      />
+
+      {/* 安装弹窗 */}
+      <InstallSkillDialog
+        open={installOpen}
+        onClose={() => setInstallOpen(false)}
+        onInstalled={() => fetchSkills(DEFAULT_USER_ID)}
       />
     </div>
   );

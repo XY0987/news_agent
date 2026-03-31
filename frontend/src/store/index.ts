@@ -228,6 +228,7 @@ interface SkillState {
   executions: SkillExecution[];
   loading: boolean;
   executing: boolean;
+  installing: boolean;
   error: string | null;
   fetchSkills: (userId: string) => Promise<void>;
   fetchSkillDetail: (skillId: string, userId: string) => Promise<void>;
@@ -252,6 +253,12 @@ interface SkillState {
     skillId?: string
   ) => Promise<void>;
   reloadSkills: (skillId?: string) => Promise<void>;
+  installSkill: (params: {
+    gitUrl: string;
+    branch?: string;
+    directory?: string;
+  }) => Promise<any>;
+  uninstallSkill: (skillId: string) => Promise<void>;
 }
 
 export const useSkillStore = create<SkillState>((set) => ({
@@ -260,6 +267,7 @@ export const useSkillStore = create<SkillState>((set) => ({
   executions: [],
   loading: false,
   executing: false,
+  installing: false,
   error: null,
 
   fetchSkills: async (userId: string) => {
@@ -357,6 +365,34 @@ export const useSkillStore = create<SkillState>((set) => ({
       await skillApi.reload(skillId);
     } catch (e: unknown) {
       set({ error: (e as Error).message });
+    }
+  },
+
+  installSkill: async (params: {
+    gitUrl: string;
+    branch?: string;
+    directory?: string;
+  }) => {
+    set({ installing: true, error: null });
+    try {
+      const res = await skillApi.install(params);
+      set({ installing: false });
+      return res;
+    } catch (e: unknown) {
+      set({ error: (e as Error).message, installing: false });
+      throw e;
+    }
+  },
+
+  uninstallSkill: async (skillId: string) => {
+    try {
+      await skillApi.uninstall(skillId);
+      set((state) => ({
+        skills: state.skills.filter((s) => s.id !== skillId),
+      }));
+    } catch (e: unknown) {
+      set({ error: (e as Error).message });
+      throw e;
     }
   },
 }));

@@ -1,10 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import * as path from 'path';
 import { SkillParserService } from './skill-parser.service.js';
-import type {
-  ParsedSkill,
-  SkillRegistryEntry,
-} from './skill.types.js';
+import type { ParsedSkill, SkillRegistryEntry } from './skill.types.js';
 
 /**
  * Skill 注册表
@@ -34,10 +31,7 @@ export class SkillRegistryService implements OnModuleInit {
 
   constructor(private readonly parser: SkillParserService) {
     // 默认 skills/ 在 backend 根目录下
-    this.skillsRootDir = path.resolve(
-      process.cwd(),
-      'skills',
-    );
+    this.skillsRootDir = path.resolve(process.cwd(), 'skills');
   }
 
   /**
@@ -96,9 +90,7 @@ export class SkillRegistryService implements OnModuleInit {
   register(skill: ParsedSkill): void {
     const existing = this.registry.get(skill.id);
     if (existing) {
-      this.logger.warn(
-        `Skill "${skill.id}" 已注册，将被覆盖`,
-      );
+      this.logger.warn(`Skill "${skill.id}" 已注册，将被覆盖`);
     }
 
     this.registry.set(skill.id, {
@@ -107,9 +99,7 @@ export class SkillRegistryService implements OnModuleInit {
       registeredAt: new Date(),
     });
 
-    this.logger.log(
-      `Skill 注册成功: ${skill.id} (${skill.frontmatter.name})`,
-    );
+    this.logger.log(`Skill 注册成功: ${skill.id} (${skill.frontmatter.name})`);
   }
 
   /**
@@ -144,9 +134,7 @@ export class SkillRegistryService implements OnModuleInit {
   /**
    * 列出所有已注册的 Skill（支持筛选）
    */
-  list(filters?: {
-    isAvailable?: boolean;
-  }): SkillRegistryEntry[] {
+  list(filters?: { isAvailable?: boolean }): SkillRegistryEntry[] {
     let entries = Array.from(this.registry.values());
 
     if (!filters) return entries;
@@ -251,9 +239,7 @@ export class SkillRegistryService implements OnModuleInit {
     const entry = this.registry.get(skillId);
     if (entry) {
       entry.isAvailable = isAvailable;
-      this.logger.log(
-        `Skill "${skillId}" 可用状态更新: ${isAvailable}`,
-      );
+      this.logger.log(`Skill "${skillId}" 可用状态更新: ${isAvailable}`);
     }
   }
 

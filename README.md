@@ -13,13 +13,15 @@
 ## ✨ 核心特性
 
 - **🤖 LLM Agent** — 基于 Function Calling 的 Agent Loop，LLM 自主编排 16 种工具完成全流程，支持 3 种运行模式（每日精选 / GitHub 热点 / 分析模式）
+- **🔌 可插拔 Skills 系统** — 对标 Claude Code Skills 标准格式，支持从 Git 仓库动态安装 Skill，渐进式加载（description → 完整 prompt → references），安全沙箱执行脚本
 - **📡 多源内容采集** — 微信公众号（正文抓取、限流、Token 过期检测）+ GitHub 热点（Trending/Topics 页面解析、多维度采集）
 - **🧠 双层评分体系** — 规则预评分（五维度加权）+ AI 深度评分（基于用户画像），自动覆盖合并
 - **✍️ AI 个性化摘要** — 基于用户画像和兴趣标签生成定制化摘要、关键要点和行动建议
 - **📧 双模板邮件推送** — 每日精选（高分展开/低分折叠）+ GitHub 热点专属模板（Star 数、语言、趋势来源）
 - **🔄 LLM 容错机制** — 主动限速（滑动窗口 RPM 控制）+ 被动重试（限频 4 级重试 + 自动切换备用模型）+ 告警邮件通知，Agent 失败时不发低质量内容
 - **💾 Agent 记忆** — 持久化存储决策经验、来源质量评估、偏好变化，跨会话可检索
-- **🎨 完整管理前端** — 10 个页面，支持数据源管理、用户画像编辑、Agent 执行日志回溯等
+- **🛡️ 脚本安全沙箱** — Skill 脚本在受限环境执行（环境变量白名单清洗、路径约束、命令注入防护、超时控制）
+- **🎨 完整管理前端** — 10+ 页面，支持数据源管理、用户画像编辑、Skill 管理与安装、Agent 执行日志回溯等
 - **🧪 测试模式** — 通过环境变量 `COLLECT_MAX_SOURCES` 限制采集源数量，不改线上数据即可快速测试全流程
 
 ---
@@ -67,42 +69,48 @@
 
 ```
 news_agent/
-├── backend/src/
-│   ├── common/
-│   │   ├── database/entities/    # 9 个 TypeORM 实体（User/Content/Score/Memory 等）
-│   │   ├── config/               # 全局配置工厂
-│   │   ├── llm-rate-limiter/     # LLM 请求主动限速（滑动窗口）
-│   │   └── redis/                # Redis 全局模块
-│   └── modules/
-│       ├── agent/                # 🤖 Agent Loop + Tool Registry（16 个工具，3 种模式）
-│       ├── collector/            # 📡 内容采集（微信公众号 + GitHub Trending/Topics）
-│       ├── content/              # 📄 内容 CRUD + 关联查询
-│       ├── digest/               # 📰 推送记录管理
-│       ├── feedback/             # 👍 用户反馈收集
-│       ├── filter/               # 🔍 六层过滤链（URL/标题/长度/时间/黑名单/相似度）
-│       ├── memory/               # 🧠 Agent 记忆（关键词检索）
-│       ├── notification/         # 📧 邮件推送（SMTP + 双模板：每日精选 / GitHub 热点）
-│       ├── scheduler/            # ⏰ 定时任务（分钟轮询 + 防重复机制）
-│       ├── scorer/               # 📊 五维度规则评分
-│       ├── source/               # 📡 数据源管理
-│       ├── summary/              # ✍️ AI 摘要 + 深度评分（LLM 调用）
-│       └── user/                 # 👤 用户管理
+├── backend/
+│   ├── src/
+│   │   ├── common/
+│   │   │   ├── database/entities/    # 11 个 TypeORM 实体（User/Content/Score/Memory/SkillConfig 等）
+│   │   │   ├── config/               # 全局配置工厂
+│   │   │   ├── llm-rate-limiter/     # LLM 请求主动限速（滑动窗口）
+│   │   │   └── redis/                # Redis 全局模块
+│   │   └── modules/
+│   │       ├── agent/                # 🤖 Agent Loop + Tool Registry（16 个工具，3 种模式）
+│   │       ├── collector/            # 📡 内容采集（微信公众号 + GitHub Trending/Topics）
+│   │       ├── content/              # 📄 内容 CRUD + 关联查询
+│   │       ├── digest/               # 📰 推送记录管理
+│   │       ├── feedback/             # 👍 用户反馈收集
+│   │       ├── filter/               # 🔍 六层过滤链（URL/标题/长度/时间/黑名单/相似度）
+│   │       ├── memory/               # 🧠 Agent 记忆（关键词检索）
+│   │       ├── notification/         # 📧 邮件推送（SMTP + 双模板：每日精选 / GitHub 热点）
+│   │       ├── scheduler/            # ⏰ 定时任务（分钟轮询 + 防重复机制）
+│   │       ├── scorer/               # 📊 五维度规则评分
+│   │       ├── skill/                # 🔌 Skills 系统（解析/注册/沙箱执行/Git 安装/增强注入）
+│   │       ├── source/               # 📡 数据源管理
+│   │       ├── summary/              # ✍️ AI 摘要 + 深度评分（LLM 调用）
+│   │       └── user/                 # 👤 用户管理
+│   └── skills/                       # 📦 Skill 定义文件目录（SKILL.md + scripts/ + references/）
+│       ├── _template/                # Skill 编写模板
+│       ├── daily-digest-email/       # 每日浓缩邮件 Skill
+│       └── reading-digest/           # 阅读笔记 Skill
 ├── frontend/src/
-│   ├── api/                      # 6 个 API 模块（Axios 封装 + 拦截器）
-│   ├── components/               # 40+ 个 UI 组件（shadcn/ui 基础 + 业务组件）
-│   │   ├── ui/                   # 17 个 shadcn/ui 基础组件
-│   │   ├── layout/               # 响应式布局（Sidebar + Header）
-│   │   ├── content/              # 内容卡片/详情/反馈
-│   │   ├── source/               # 数据源管理/微信搜索/GitHub 添加
-│   │   ├── profile/              # 画像编辑/兴趣标签
-│   │   ├── agent/                # Agent 洞察
-│   │   └── common/               # 评分指示器/标签选择器
-│   ├── pages/                    # 10 个页面
-│   ├── store/                    # 3 个 Zustand Store
-│   ├── types/                    # 前后端类型契约
-│   └── utils/                    # 日期/评分/状态工具函数
+│   ├── api/                          # 7 个 API 模块（Axios 封装 + 拦截器）
+│   ├── components/                   # 40+ 个 UI 组件（shadcn/ui 基础 + 业务组件）
+│   │   ├── ui/                       # 17 个 shadcn/ui 基础组件
+│   │   ├── layout/                   # 响应式布局（Sidebar + Header）
+│   │   ├── content/                  # 内容卡片/详情/反馈
+│   │   ├── source/                   # 数据源管理/微信搜索/GitHub 添加
+│   │   ├── profile/                  # 画像编辑/兴趣标签
+│   │   ├── agent/                    # Agent 洞察
+│   │   └── common/                   # 评分指示器/标签选择器
+│   ├── pages/                        # 10+ 页面（含 Skills 管理页）
+│   ├── store/                        # 4 个 Zustand Store（User/Content/Source/Skill）
+│   ├── types/                        # 前后端类型契约
+│   └── utils/                        # 日期/评分/状态工具函数
 ├── docker-compose.yml
-└── start.sh                      # 一键部署脚本
+└── start.sh                          # 一键部署脚本
 ```
 
 ---
@@ -220,8 +228,110 @@ news_agent/
 | `Memory` | `memories` | Agent 记忆（决策经验/来源质量/偏好变化/洞察） |
 | `Digest` | `digests` | 推送记录（Markdown+HTML 渲染/发送时间） |
 | `AgentLog` | `agent_logs` | Agent 执行日志（session/action/input/output/耗时） |
+| `SkillConfig` | `skill_configs` | Skill 用户配置（启用状态/settings 覆盖值，userId+skillId 联合唯一） |
+| `SkillExecution` | `skill_executions` | Skill 执行记录（状态/输入输出/步数/Token/耗时） |
 
 所有实体使用 UUID 主键，通过 `userId` 关联到 `User`，级联删除。
+
+---
+
+## 🔌 Skills 可插拔技能系统
+
+对标 **Claude Code / CodeBuddy Skills** 标准格式，为 Agent 扩展可插拔能力。
+
+### Skill 标准格式
+
+每个 Skill 是 `backend/skills/` 下的一个目录，核心是 `SKILL.md` 文件：
+
+```
+skills/
+└── daily-digest-email/
+    ├── SKILL.md          # frontmatter（name + description）+ Markdown 正文（Agent 完整指令）
+    ├── scripts/          # 可执行脚本（pre_run/post_run 生命周期 + Agent 可调用工具）
+    ├── references/       # 参考文档（按需加载到 Agent 上下文）
+    └── assets/           # 静态资源
+```
+
+**SKILL.md** frontmatter 极简设计（只有 `name` + `description`），所有复杂指令都在 Markdown 正文中：
+
+```yaml
+---
+name: daily-digest-email
+description: >
+  每日内容浓缩邮件 Skill。文章采集分析完成后触发此技能。
+---
+
+# 你的 Agent 指令...
+```
+
+### 渐进式加载（三阶段）
+
+| 阶段 | 何时加载 | 加载什么 | 上下文成本 |
+|------|---------|---------|-----------|
+| 第一阶段 | 会话启动时 | 所有已启用 Skill 的 name + description | 低 |
+| 第二阶段 | AI 判断需要时 | SKILL.md 完整 Markdown 正文（通过 `load_skill` 工具） | 按需 |
+| 第三阶段 | 需要更多细节时 | references/ 目录下的参考文档 | 按需 |
+
+### 两种脚本能力
+
+| 模式 | 语法 | 执行时机 | 说明 |
+|------|------|---------|------|
+| 预处理注入 | `` !`node scripts/gather.js` `` | Prompt 构建阶段 | 命令 stdout 静态替换到 Prompt 中 |
+| 动态工具 | `scripts/*.{js,ts,sh}` | Agent 推理阶段 | 自动注册为 Agent 可调用工具 |
+
+### 从 Git 仓库安装 Skill
+
+用户只需提供 Git 仓库地址，系统自动 clone 并注册：
+
+```bash
+# API 安装
+curl -X POST http://localhost:8000/api/skills/install \
+  -H "Content-Type: application/json" \
+  -d '{
+    "gitUrl": "https://github.com/user/my-skill.git",
+    "branch": "main",
+    "directory": "skills/my-custom-skill"
+  }'
+
+# 卸载
+curl -X DELETE http://localhost:8000/api/skills/my-custom-skill/uninstall
+
+# 更新（重新 clone）
+curl -X POST http://localhost:8000/api/skills/my-custom-skill/update
+```
+
+前端 Skills 管理页面也提供可视化安装入口。
+
+### Skills API 端点
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/api/skills` | 获取 Skill 列表 |
+| `GET` | `/api/skills/:id` | 获取 Skill 详情 |
+| `POST` | `/api/skills/:id/run` | 手动执行 Skill |
+| `POST` | `/api/skills/:id/enable` | 启用 Skill |
+| `POST` | `/api/skills/:id/disable` | 禁用 Skill |
+| `POST` | `/api/skills/install` | 从 Git 仓库安装 Skill |
+| `DELETE` | `/api/skills/:id/uninstall` | 卸载 Git Skill |
+| `POST` | `/api/skills/:id/update` | 更新 Git Skill |
+| `POST` | `/api/skills/reload` | 热重载 |
+
+---
+
+## 🛡️ 脚本安全沙箱
+
+所有 Skill 脚本通过 `SkillSandboxService` 在受限环境中执行：
+
+| 安全策略 | 说明 |
+|---------|------|
+| **命令注入防护** | 禁止 shell 元字符（`; && \|\| \| > < $()` 等） |
+| **路径约束** | 脚本必须在 Skill 目录内，禁止路径穿越（`..`）+ 符号链接检查 |
+| **环境变量清洗** | 只透传白名单变量（PATH、HOME、NODE_ENV 等），不暴露系统敏感信息 |
+| **文件操作受限** | 脚本可写范围限制在 `tmp/` 和 `output/` 目录，通过 `SKILL_WRITABLE_DIRS` 环境变量声明 |
+| **网络可用但有超时** | 允许网络请求（HTTP/HTTPS），整体脚本超时 30 秒 |
+| **白名单解释器** | 仅允许 `node`、`npx tsx`、`bash`、`cat` 四种解释器 |
+| **资源限制** | 超时 30s + stdout 最大 1MB |
+| **Git 安装安全** | 只允许 HTTPS URL、禁止 URL 含密码、shallow clone、目录大小限制 50MB |
 
 ---
 
@@ -423,6 +533,7 @@ curl -X POST http://localhost:8000/api/agent/run-github?userId=YOUR_USER_ID
 | 信息流 | `/feed` | 浏览所有已采集文章，支持筛选和分页 |
 | 数据源管理 | `/sources` | 添加/删除数据源，查看采集统计，微信搜索添加，GitHub 源添加 |
 | Agent 洞察 | `/insights` | 查看 Agent 执行历史，回溯每步决策和工具调用 |
+| Skills 管理 | `/skills` | Skill 列表、启用/禁用、手动执行、从 Git 安装/卸载、执行记录 |
 | 用户画像 | `/profile` | 编辑个人画像、专业领域、经验水平 |
 | 偏好设置 | `/preferences` | 管理兴趣标签、排除标签、阅读偏好 |
 | 阅读历史 | `/history` | 查看反馈过的文章记录 |
@@ -487,12 +598,14 @@ curl -X POST http://localhost:8000/api/agent/run-github?userId=YOUR_USER_ID
 | 模块 | 状态 | 说明 |
 |------|------|------|
 | Agent Loop + 16 工具 | ✅ 已完成 | 3 种模式（每日精选/GitHub 热点/分析），含容错和兜底 |
+| Skills 可插拔技能系统 | ✅ 已完成 | 对标 Claude Code 标准格式，渐进式加载，Git 安装/卸载/更新 |
+| 脚本安全沙箱 | ✅ 已完成 | 环境变量白名单、路径约束、命令注入防护、超时控制 |
 | 微信公众号采集 | ✅ 已完成 | 正文抓取、限流、Token 过期检测、自动刷新 |
 | GitHub 热点采集 | ✅ 已完成 | Trending（daily/weekly/monthly）+ Topics 页面解析，跨源去重 |
 | AI 摘要 + 评分 | ✅ 已完成 | LLM 生成摘要、评分，降级为规则摘要 |
 | 邮件推送 | ✅ 已完成 | 双模板（每日精选 + GitHub 热点），纯文本降级 |
 | Agent 记忆 | ✅ 已完成 | 基于关键词检索的 MySQL 持久化 |
-| 前端管理界面 | ✅ 已完成 | 10 个页面，40+ 组件，响应式设计 |
+| 前端管理界面 | ✅ 已完成 | 11 个页面，40+ 组件，含 Skills 管理与安装 |
 | 定时调度 | ✅ 已完成 | 分钟轮询 + 用户推送时间匹配 + 防重复 |
 | Docker 部署 | ✅ 已完成 | 多阶段构建 + 一键启动脚本 |
 | 测试模式 | ✅ 已完成 | 环境变量控制采集源数量，不改线上数据 |

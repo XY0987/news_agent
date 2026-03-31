@@ -23,8 +23,16 @@ export class FilterService {
   private readonly logger = new Logger(FilterService.name);
 
   private readonly BLACKLIST_KEYWORDS = [
-    '广告', '推广', '商务合作', '赞助', '优惠券', '打折',
-    'ad', 'sponsored', 'promotion', 'advertisement',
+    '广告',
+    '推广',
+    '商务合作',
+    '赞助',
+    '优惠券',
+    '打折',
+    'ad',
+    'sponsored',
+    'promotion',
+    'advertisement',
   ];
 
   constructor(
@@ -56,7 +64,15 @@ export class FilterService {
       return {
         passedIds: [],
         filteredOut: [],
-        stats: { total: 0, passed: 0, duplicateRemoved: 0, tooShort: 0, tooOld: 0, blacklisted: 0, similarToSent: 0 },
+        stats: {
+          total: 0,
+          passed: 0,
+          duplicateRemoved: 0,
+          tooShort: 0,
+          tooOld: 0,
+          blacklisted: 0,
+          similarToSent: 0,
+        },
       };
     } else {
       const since = new Date();
@@ -109,7 +125,8 @@ export class FilterService {
       }
 
       // 2. 标题 hash 弱去重（批次内）
-      const titleHash = content.titleHash || this.simpleHash(content.title || '');
+      const titleHash =
+        content.titleHash || this.simpleHash(content.title || '');
       if (titleHash && seenTitleHashes.has(titleHash)) {
         stats.duplicateRemoved++;
         filteredOut.push({ id: content.id, reason: 'duplicate_title' });
@@ -120,7 +137,10 @@ export class FilterService {
       const contentLength = content.content ? content.content.length : 0;
       if (contentLength < minLength) {
         stats.tooShort++;
-        filteredOut.push({ id: content.id, reason: `too_short (${contentLength} chars)` });
+        filteredOut.push({
+          id: content.id,
+          reason: `too_short (${contentLength} chars)`,
+        });
         continue;
       }
 
@@ -163,7 +183,10 @@ export class FilterService {
   /**
    * 获取最近已推送内容的标题
    */
-  private async getRecentSentTitles(userId: string, days: number): Promise<string[]> {
+  private async getRecentSentTitles(
+    userId: string,
+    days: number,
+  ): Promise<string[]> {
     const since = new Date();
     since.setDate(since.getDate() - days);
 
@@ -195,7 +218,9 @@ export class FilterService {
       const sentTokens = this.tokenize(sentTitle);
       if (sentTokens.size === 0) continue;
 
-      const intersection = new Set([...titleTokens].filter((t) => sentTokens.has(t)));
+      const intersection = new Set(
+        [...titleTokens].filter((t) => sentTokens.has(t)),
+      );
       const union = new Set([...titleTokens, ...sentTokens]);
       const similarity = intersection.size / union.size;
 
@@ -230,7 +255,9 @@ export class FilterService {
    */
   private isBlacklisted(content: ContentEntity): boolean {
     const title = (content.title || '').toLowerCase();
-    return this.BLACKLIST_KEYWORDS.some((kw) => title.includes(kw.toLowerCase()));
+    return this.BLACKLIST_KEYWORDS.some((kw) =>
+      title.includes(kw.toLowerCase()),
+    );
   }
 
   /**

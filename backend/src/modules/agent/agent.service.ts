@@ -575,10 +575,7 @@ export class AgentService {
 
       // 异常兜底：先尝试自动推送，再发告警
       if (enableAutoDigest) {
-        const autoResult = await this.autoSendDigestIfReady(
-          userId,
-          sessionId,
-        );
+        const autoResult = await this.autoSendDigestIfReady(userId, sessionId);
         if (autoResult.success) {
           return {
             sessionId,
@@ -727,7 +724,8 @@ export class AgentService {
 你的目标是为用户产出一份高质量的每日精选推送。
 请自主决定执行步骤，合理使用可用工具。
 完成后输出最终的执行报告。`,
-        tools: this.toolRegistry.getToolDefinitions() as OpenAI.ChatCompletionTool[],
+        tools:
+          this.toolRegistry.getToolDefinitions() as OpenAI.ChatCompletionTool[],
         digestToolName: 'send_daily_digest',
         defaultReport: '任务已完成',
         enableAutoDigest: true,
@@ -786,13 +784,12 @@ export class AgentService {
     sessionId: string,
   ): Promise<{ success: boolean; contentCount: number; message: string }> {
     try {
-      this.logger.log(
-        `[${sessionId}] 尝试自动推送: 查找今日已分析内容...`,
-      );
+      this.logger.log(`[${sessionId}] 尝试自动推送: 查找今日已分析内容...`);
 
       // 利用 NotificationService 的 sendTodayAnalyzed 逻辑
-      const result =
-        await this.toolRegistry.getNotificationService().sendTodayAnalyzed(userId);
+      const result = await this.toolRegistry
+        .getNotificationService()
+        .sendTodayAnalyzed(userId);
 
       if (result.success) {
         this.logger.log(
@@ -823,9 +820,7 @@ export class AgentService {
         };
       }
 
-      this.logger.warn(
-        `[${sessionId}] 自动推送无内容: ${result.message}`,
-      );
+      this.logger.warn(`[${sessionId}] 自动推送无内容: ${result.message}`);
       return {
         success: false,
         contentCount: 0,
@@ -1341,7 +1336,8 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
 你的目标是对数据库中已有的文章进行高质量的 AI 分析、评分和推送。
 请自主决定执行步骤，合理使用可用工具。
 完成后输出最终的执行报告。`,
-        tools: this.toolRegistry.getToolDefinitions() as OpenAI.ChatCompletionTool[],
+        tools:
+          this.toolRegistry.getToolDefinitions() as OpenAI.ChatCompletionTool[],
         digestToolName: 'send_daily_digest',
         defaultReport: '分析任务已完成',
         enableAutoDigest: true,

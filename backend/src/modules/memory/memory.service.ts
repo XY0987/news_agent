@@ -34,7 +34,8 @@ export class MemoryService {
     // 简单关键词匹配过滤
     const keywords = query.toLowerCase().split(/\s+/);
     const matched = memories.filter((m) => {
-      const text = JSON.stringify(m.value).toLowerCase() + m.memoryKey.toLowerCase();
+      const text =
+        JSON.stringify(m.value).toLowerCase() + m.memoryKey.toLowerCase();
       return keywords.some((kw) => text.includes(kw));
     });
 
@@ -104,7 +105,9 @@ export class MemoryService {
     });
 
     const saved = await this.memoryRepo.save(memory);
-    this.logger.log(`存储来源建议: sourceId=${data.sourceId}, action=${data.action}`);
+    this.logger.log(
+      `存储来源建议: sourceId=${data.sourceId}, action=${data.action}`,
+    );
     return { id: saved.id, message: `来源建议已记录: ${data.action}` };
   }
 

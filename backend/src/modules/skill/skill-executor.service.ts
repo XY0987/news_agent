@@ -1,5 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { exec } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
@@ -7,6 +6,7 @@ import { AgentToolRegistry } from '../agent/agent-tool-registry.js';
 import { SkillRegistryService } from './skill-registry.service.js';
 import { SkillPromptService } from './skill-prompt.service.js';
 import { SkillParserService } from './skill-parser.service.js';
+import { SkillSandboxService } from './skill-sandbox.service.js';
 import type {
   ParsedSkill,
   SkillExecutionContext,
@@ -58,6 +58,7 @@ export class SkillExecutorService {
     private readonly promptService: SkillPromptService,
     private readonly parserService: SkillParserService,
     private readonly toolRegistry: AgentToolRegistry,
+    private readonly sandbox: SkillSandboxService,
   ) {}
 
   /**
@@ -65,9 +66,7 @@ export class SkillExecutorService {
    *
    * 将 ParsedSkill + 用户上下文 转换为 runAgentLoop() 所需的 config
    */
-  async buildConfig(
-    context: SkillExecutionContext,
-  ): Promise<AgentLoopConfig> {
+  async buildConfig(context: SkillExecutionContext): Promise<AgentLoopConfig> {
     const { skillId, userId, params, userSettings } = context;
 
     // 1. 获取已解析的 Skill
@@ -80,17 +79,14 @@ export class SkillExecutorService {
 
     // 2. 构建变量上下文
     const variables = this.promptService.buildVariables({
-      userName: params.userName,
-      userInterests: params.userInterests,
+      userName: params.userName as string,
+      userInterests: params.userInterests as string,
       userSettings,
       inputParams: params,
     });
 
     // 3. Prompt 插值（Markdown 正文即为完整 Agent 指令）
-    let systemPrompt = this.promptService.interpolate(
-      skill.prompt,
-      variables,
-    );
+    let systemPrompt = this.promptService.interpolate(skill.prompt, variables);
 
     // 3.5 处理 !`command` 脚本注入（参照 Claude Code Skills 设计）
     //     在变量插值之后、追加 references 之前执行
@@ -151,9 +147,7 @@ export class SkillExecutorService {
    * 注意：此方法不直接调用 runAgentLoop()，只负责生命周期钩子和配置构建
    * AgentLoop 的实际调用由 AgentService.runSkill() 完成
    */
-  async executeLifecycle(
-    context: SkillExecutionContext,
-  ): Promise<{
+  async executeLifecycle(context: SkillExecutionContext): Promise<{
     config: AgentLoopConfig;
     preRunOutput?: string;
   }> {
@@ -163,14 +157,8 @@ export class SkillExecutorService {
     // 执行 pre_run 钩子
     let preRunOutput: string | undefined;
     if (this.hasLifecycleScript(skill, 'pre_run')) {
-      this.logger.log(
-        `执行 pre_run 钩子: ${context.skillId}`,
-      );
-      const result = await this.runLifecycleScript(
-        skill,
-        'pre_run',
-        context,
-      );
+      this.logger.log(`执行 pre_run 钩子: ${context.skillId}`);
+      const result = await this.runLifecycleScript(skill, 'pre_run', context);
 
       if (result.exitCode !== 0) {
         throw new Error(
@@ -201,21 +189,15 @@ export class SkillExecutorService {
 
     // 执行 post_run 脚本
     if (this.hasLifecycleScript(skill, 'post_run')) {
-      this.logger.log(
-        `执行 post_run 钩子: ${context.skillId}`,
-      );
+      this.logger.log(`执行 post_run 钩子: ${context.skillId}`);
 
-      const result = await this.runLifecycleScript(
-        skill,
-        'post_run',
-        {
-          ...context,
-          params: {
-            ...context.params,
-            _agentResult: JSON.stringify(agentResult),
-          },
+      const result = await this.runLifecycleScript(skill, 'post_run', {
+        ...context,
+        params: {
+          ...context.params,
+          _agentResult: JSON.stringify(agentResult),
         },
-      );
+      });
 
       if (result.exitCode !== 0) {
         // post_run 失败仅记录警告，不中止
@@ -237,10 +219,7 @@ export class SkillExecutorService {
    * 标准 Skill 格式中，references/ 目录下的文件作为补充知识，全部加载。
    * 如果不需要某些文件，应从 references/ 目录中移除而非在代码中过滤。
    */
-  private appendReferences(
-    skill: ParsedSkill,
-    systemPrompt: string,
-  ): string {
+  private appendReferences(skill: ParsedSkill, systemPrompt: string): string {
     if (skill.references.length === 0) return systemPrompt;
 
     const refContents: string[] = [];
@@ -251,9 +230,7 @@ export class SkillExecutorService {
         refName,
       );
       if (content) {
-        refContents.push(
-          `\n---\n## 📖 参考资料: ${refName}\n\n${content}\n`,
-        );
+        refContents.push(`\n---\n## 📖 参考资料: ${refName}\n\n${content}\n`);
       } else {
         this.logger.warn(
           `Skill "${skill.id}" reference 文件读取失败: ${refName}`,
@@ -262,9 +239,7 @@ export class SkillExecutorService {
     }
 
     if (refContents.length > 0) {
-      return (
-        systemPrompt + '\n\n' + refContents.join('\n')
-      );
+      return systemPrompt + '\n\n' + refContents.join('\n');
     }
 
     return systemPrompt;
@@ -279,15 +254,16 @@ export class SkillExecutorService {
   ): string {
     const parts: string[] = [];
 
-    parts.push(
-      `请执行 "${skill.frontmatter.name}" 技能任务。`,
-    );
+    parts.push(`请执行 "${skill.frontmatter.name}" 技能任务。`);
 
     // 添加输入参数说明
     if (Object.keys(context.params).length > 0) {
       const paramEntries = Object.entries(context.params)
         .filter(([key]) => !key.startsWith('_')) // 过滤内部参数
-        .map(([key, value]) => `- ${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`)
+        .map(
+          ([key, value]) =>
+            `- ${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`,
+        )
         .join('\n');
 
       if (paramEntries) {
@@ -297,9 +273,7 @@ export class SkillExecutorService {
 
     // 添加 pre_run 脚本输出
     if (context.params._preRunOutput) {
-      parts.push(
-        `\n**预处理脚本输出：**\n${context.params._preRunOutput}`,
-      );
+      parts.push(`\n**预处理脚本输出：**\n${context.params._preRunOutput}`);
     }
 
     return parts.join('\n');
@@ -308,10 +282,7 @@ export class SkillExecutorService {
   /**
    * 检查是否存在指定生命周期脚本
    */
-  private hasLifecycleScript(
-    skill: ParsedSkill,
-    hookName: string,
-  ): boolean {
+  private hasLifecycleScript(skill: ParsedSkill, hookName: string): boolean {
     const scriptsDir = path.join(skill.dirPath, 'scripts');
     const extensions = ['.sh', '.ts', '.js'];
 
@@ -321,7 +292,7 @@ export class SkillExecutorService {
   }
 
   /**
-   * 执行生命周期脚本
+   * 执行生命周期脚本（通过安全沙箱）
    */
   private async runLifecycleScript(
     skill: ParsedSkill,
@@ -349,66 +320,17 @@ export class SkillExecutorService {
       };
     }
 
-    const startTime = Date.now();
-
-    // 确定执行命令
-    let command: string;
-    if (scriptPath.endsWith('.sh')) {
-      command = `bash "${scriptPath}"`;
-    } else if (scriptPath.endsWith('.ts')) {
-      command = `npx tsx "${scriptPath}"`;
-    } else {
-      command = `node "${scriptPath}"`;
-    }
-
-    // 环境变量注入
-    const env = {
-      ...process.env,
-      SKILL_ID: skill.id,
-      SKILL_NAME: skill.frontmatter.name,
-      SKILL_DIR: skill.dirPath,
-      USER_ID: context.userId,
-      SESSION_ID: context.sessionId,
-      SKILL_PARAMS: JSON.stringify(context.params),
-      SKILL_SETTINGS: JSON.stringify(context.userSettings),
-    };
-
-    // 超时控制（脚本默认 30 秒）
-    const scriptTimeout = 30_000;
-
-    return new Promise<ScriptExecutionResult>((resolve) => {
-      exec(
-        command,
-        {
-          cwd: skill.dirPath,
-          env,
-          timeout: scriptTimeout,
-          maxBuffer: 1024 * 1024, // 1MB
-        },
-        (error, stdout, stderr) => {
-          const durationMs = Date.now() - startTime;
-
-          if (error) {
-            this.logger.warn(
-              `脚本 ${hookName} 执行异常: ${error.message}`,
-            );
-            resolve({
-              exitCode: error.code ?? 1,
-              stdout: stdout || '',
-              stderr: stderr || error.message,
-              durationMs,
-            });
-            return;
-          }
-
-          resolve({
-            exitCode: 0,
-            stdout: stdout || '',
-            stderr: stderr || '',
-            durationMs,
-          });
-        },
-      );
+    // 通过沙箱执行，注入 Skill 上下文环境变量
+    return this.sandbox.executeScript(scriptPath, skill.dirPath, {
+      env: {
+        SKILL_ID: skill.id,
+        SKILL_NAME: skill.frontmatter.name,
+        SKILL_DIR: skill.dirPath,
+        USER_ID: context.userId,
+        SESSION_ID: context.sessionId,
+        SKILL_PARAMS: JSON.stringify(context.params),
+        SKILL_SETTINGS: JSON.stringify(context.userSettings),
+      },
     });
   }
 
@@ -433,7 +355,11 @@ export class SkillExecutorService {
   // ==================== Skill 脚本工具（模式 2：Agent 推理中按需调用） ====================
 
   /** 生命周期脚本名前缀（不注册为可调用工具） */
-  private static readonly LIFECYCLE_SCRIPTS = ['pre_run', 'post_run', 'gather_context'];
+  private static readonly LIFECYCLE_SCRIPTS = [
+    'pre_run',
+    'post_run',
+    'gather_context',
+  ];
 
   /**
    * 获取 Skill 中可被 Agent 调用的脚本列表（排除生命周期脚本）
@@ -483,7 +409,8 @@ export class SkillExecutorService {
           properties: {
             args: {
               type: 'object',
-              description: '传递给脚本的参数（JSON 对象），脚本可通过 SCRIPT_ARGS 环境变量读取',
+              description:
+                '传递给脚本的参数（JSON 对象），脚本可通过 SCRIPT_ARGS 环境变量读取',
             },
           },
           required: [],
@@ -523,13 +450,15 @@ export class SkillExecutorService {
   }
 
   /**
-   * 执行 Skill 脚本并返回结果
+   * 执行 Skill 脚本并返回结果（通过安全沙箱）
    *
-   * 安全约束：
+   * 安全约束（由 SkillSandboxService 统一保障）：
    * - 脚本必须位于 Skill 的 scripts/ 目录下
+   * - 路径穿越防护 + 符号链接检查
    * - 超时 30 秒
    * - stdout 最大 1MB
-   * - cwd 固定为 Skill 目录
+   * - 环境变量白名单清洗
+   * - 文件写入受限于 tmp/ 和 output/ 目录
    */
   private async executeSkillScript(
     scriptPath: string,
@@ -543,90 +472,37 @@ export class SkillExecutorService {
     error?: string;
     durationMs: number;
   }> {
-    // 安全检查：确保脚本路径在 Skill 目录内
-    const resolvedPath = path.resolve(scriptPath);
-    const resolvedSkillDir = path.resolve(skill.dirPath);
-    if (!resolvedPath.startsWith(resolvedSkillDir)) {
-      return {
-        success: false,
-        output: '',
-        error: `安全错误: 脚本路径 ${scriptPath} 不在 Skill 目录内`,
-        durationMs: 0,
-      };
-    }
-
-    if (!fs.existsSync(resolvedPath)) {
-      return {
-        success: false,
-        output: '',
-        error: `脚本不存在: ${scriptName}`,
-        durationMs: 0,
-      };
-    }
-
-    const startTime = Date.now();
-
-    // 确定执行命令
-    let command: string;
-    if (scriptPath.endsWith('.sh')) {
-      command = `bash "${resolvedPath}"`;
-    } else if (scriptPath.endsWith('.ts')) {
-      command = `npx tsx "${resolvedPath}"`;
-    } else {
-      command = `node "${resolvedPath}"`;
-    }
-
-    // 环境变量注入
-    const env: Record<string, string> = {
-      ...process.env as Record<string, string>,
-      SKILL_ID: skill.id,
-      SKILL_NAME: skill.frontmatter.name,
-      SKILL_DIR: skill.dirPath,
-      USER_ID: context.userId,
-      SESSION_ID: context.sessionId,
-      SKILL_PARAMS: JSON.stringify(context.params),
-      SKILL_SETTINGS: JSON.stringify(context.userSettings),
-      SCRIPT_ARGS: JSON.stringify(args),
-    };
-
-    const scriptTimeout = 30_000;
-
-    return new Promise((resolve) => {
-      exec(
-        command,
-        {
-          cwd: skill.dirPath,
-          env,
-          timeout: scriptTimeout,
-          maxBuffer: 1024 * 1024,
-        },
-        (error, stdout, stderr) => {
-          const durationMs = Date.now() - startTime;
-
-          if (error) {
-            this.logger.warn(
-              `Skill 脚本 ${scriptName} 执行异常: ${error.message}`,
-            );
-            resolve({
-              success: false,
-              output: stdout?.trim() || '',
-              error: stderr?.trim() || error.message,
-              durationMs,
-            });
-            return;
-          }
-
-          this.logger.log(
-            `Skill 脚本 ${scriptName} 执行成功: ${(stdout?.length || 0)} chars, ${durationMs}ms`,
-          );
-          resolve({
-            success: true,
-            output: stdout?.trim() || '',
-            error: stderr?.trim() || undefined,
-            durationMs,
-          });
-        },
-      );
+    const result = await this.sandbox.executeScript(scriptPath, skill.dirPath, {
+      env: {
+        SKILL_ID: skill.id,
+        SKILL_NAME: skill.frontmatter.name,
+        SKILL_DIR: skill.dirPath,
+        USER_ID: context.userId,
+        SESSION_ID: context.sessionId,
+        SKILL_PARAMS: JSON.stringify(context.params),
+        SKILL_SETTINGS: JSON.stringify(context.userSettings),
+        SCRIPT_ARGS: JSON.stringify(args),
+      },
     });
+
+    if (result.exitCode !== 0) {
+      this.logger.warn(`Skill 脚本 ${scriptName} 执行异常: ${result.stderr}`);
+      return {
+        success: false,
+        output: result.stdout?.trim() || '',
+        error: result.stderr?.trim() || `exit code ${result.exitCode}`,
+        durationMs: result.durationMs,
+      };
+    }
+
+    this.logger.log(
+      `Skill 脚本 ${scriptName} 执行成功: ${result.stdout?.length || 0} chars, ${result.durationMs}ms`,
+    );
+    return {
+      success: true,
+      output: result.stdout?.trim() || '',
+      error: result.stderr?.trim() || undefined,
+      durationMs: result.durationMs,
+    };
   }
 }

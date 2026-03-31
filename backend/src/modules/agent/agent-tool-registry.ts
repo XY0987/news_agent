@@ -318,9 +318,10 @@ export class AgentToolRegistry {
         required: ['userId'],
       },
       execute: async ({ userId, sourceIds }) => {
-        const results = sourceIds && sourceIds.length > 0
-          ? await this.collectorService.collectBySources(sourceIds)
-          : await this.collectorService.collectByUser(userId);
+        const results =
+          sourceIds && sourceIds.length > 0
+            ? await this.collectorService.collectBySources(sourceIds)
+            : await this.collectorService.collectByUser(userId);
 
         const allSavedIds = results.flatMap((r) => r.savedContentIds || []);
 
@@ -351,9 +352,10 @@ export class AgentToolRegistry {
         required: ['userId'],
       },
       execute: async ({ userId, sourceIds }) => {
-        const results = sourceIds && sourceIds.length > 0
-          ? await this.collectorService.collectBySources(sourceIds)
-          : await this.collectorService.collectGithubByUser(userId);
+        const results =
+          sourceIds && sourceIds.length > 0
+            ? await this.collectorService.collectBySources(sourceIds)
+            : await this.collectorService.collectGithubByUser(userId);
 
         // 汇总所有 savedContentIds
         const allSavedIds = results.flatMap((r) => r.savedContentIds || []);
@@ -397,7 +399,13 @@ export class AgentToolRegistry {
         },
         required: ['userId'],
       },
-      execute: async ({ contentIds, userId, sourceType, minLength, daysWindow }) => {
+      execute: async ({
+        contentIds,
+        userId,
+        sourceType,
+        minLength,
+        daysWindow,
+      }) => {
         return this.filterService.filterAndDedup({
           contentIds,
           userId,
@@ -519,7 +527,8 @@ export class AgentToolRegistry {
           contentIds: {
             type: 'array',
             items: { type: 'string' },
-            description: '最终推送的所有内容 ID 列表（传入所有已生成摘要的文章 ID，不限数量）',
+            description:
+              '最终推送的所有内容 ID 列表（传入所有已生成摘要的文章 ID，不限数量）',
           },
           agentNote: {
             type: 'string',

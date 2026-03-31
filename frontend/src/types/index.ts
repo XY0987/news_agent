@@ -74,14 +74,14 @@ export interface ScoreBreakdown {
 }
 
 export interface ActionSuggestion {
-  type: 'learn' | 'practice' | 'read';
+  type: "learn" | "practice" | "read";
   suggestion: string;
 }
 
 export interface DigestContent {
   id: string;
   date: string;
-  type: 'daily' | 'weekly';
+  type: "daily" | "weekly";
   contents: Content[];
 }
 
@@ -94,7 +94,7 @@ export interface Suggestion {
 
 export interface Feedback {
   contentId: string;
-  type: 'useful' | 'useless' | 'save' | 'ignore';
+  type: "useful" | "useless" | "save" | "ignore";
   reason?: string;
 }
 
@@ -110,8 +110,23 @@ export interface Skill {
   category?: string;
   builtin?: boolean;
   triggerType: string;
-  status: 'enabled' | 'disabled' | 'not_configured';
+  status: "enabled" | "disabled" | "not_configured";
   settings?: Record<string, any>;
+  /** Git 来源信息（通过 git 安装的 Skill 才有） */
+  gitSource?: SkillGitSource;
+}
+
+export interface SkillGitSource {
+  gitUrl: string;
+  branch: string;
+  directory?: string | null;
+  installedAt: string;
+}
+
+export interface InstallSkillParams {
+  gitUrl: string;
+  branch?: string;
+  directory?: string;
 }
 
 export interface SkillDetail extends Skill {
@@ -136,7 +151,7 @@ export interface SkillDetail extends Skill {
   };
   settingDefinitions?: SkillSettingDef[];
   userConfig: {
-    status: 'enabled' | 'disabled' | 'not_configured';
+    status: "enabled" | "disabled" | "not_configured";
     settings: Record<string, any>;
   };
   recentExecutions: SkillExecution[];
@@ -152,7 +167,7 @@ export interface SkillInputParam {
 export interface SkillSettingDef {
   key: string;
   label: string;
-  type: 'string' | 'number' | 'boolean' | 'select';
+  type: "string" | "number" | "boolean" | "select";
   default?: any;
   min?: number;
   max?: number;
@@ -162,7 +177,7 @@ export interface SkillSettingDef {
 export interface SkillExecution {
   id: string;
   sessionId: string;
-  status: 'running' | 'success' | 'failed';
+  status: "running" | "success" | "failed";
   stepsCount: number;
   durationMs: number;
   startedAt: string;

@@ -30,7 +30,9 @@ export class EmailChannel {
   private initTransporter(): void {
     const host = this.configService.get<string>('notification.smtp.host');
     const user = this.configService.get<string>('notification.smtp.user');
-    const password = this.configService.get<string>('notification.smtp.password');
+    const password = this.configService.get<string>(
+      'notification.smtp.password',
+    );
 
     if (!host || !user || !password) {
       this.logger.warn('SMTP 配置不完整，邮件推送功能不可用');
@@ -40,7 +42,8 @@ export class EmailChannel {
     this.transporter = nodemailer.createTransport({
       host,
       port: this.configService.get<number>('notification.smtp.port') || 465,
-      secure: this.configService.get<boolean>('notification.smtp.secure') !== false,
+      secure:
+        this.configService.get<boolean>('notification.smtp.secure') !== false,
       auth: { user, pass: password },
     });
 
@@ -85,7 +88,9 @@ export class EmailChannel {
         text: options.text,
       });
 
-      this.logger.log(`邮件发送成功: to=${options.to}, messageId=${info.messageId}`);
+      this.logger.log(
+        `邮件发送成功: to=${options.to}, messageId=${info.messageId}`,
+      );
       return { success: true, messageId: info.messageId };
     } catch (error) {
       const msg = (error as Error).message;
@@ -195,7 +200,7 @@ export class EmailChannel {
       Ruby: '#701516',
     };
 
-    const renderItem = (item: typeof data.items[0]) => {
+    const renderItem = (item: (typeof data.items)[0]) => {
       const langColor = langColorMap[item.language] || '#8b949e';
       const hasSummary = item.summary && item.summary.trim().length > 0;
       const sourceLabel =
@@ -226,7 +231,17 @@ export class EmailChannel {
           <span>⭐ ${item.stars.toLocaleString()}</span>
           ${item.starsToday > 0 ? `<span style="color:#1a7f37;font-weight:600;">🔥 +${item.starsToday.toLocaleString()}</span>` : ''}
           ${item.forks > 0 ? `<span>🍴 ${item.forks.toLocaleString()}</span>` : ''}
-          ${item.topics && item.topics.length > 0 ? item.topics.slice(0, 3).map((t) => `<span style="background:#ddf4ff;color:#0969da;padding:1px 8px;border-radius:12px;font-size:11px;">${this.escapeHtml(t)}</span>`).join('') : ''}
+          ${
+            item.topics && item.topics.length > 0
+              ? item.topics
+                  .slice(0, 3)
+                  .map(
+                    (t) =>
+                      `<span style="background:#ddf4ff;color:#0969da;padding:1px 8px;border-radius:12px;font-size:11px;">${this.escapeHtml(t)}</span>`,
+                  )
+                  .join('')
+              : ''
+          }
         </div>
         ${
           hasSummary
@@ -309,7 +324,8 @@ export class EmailChannel {
       text += `${item.index}. ${item.fullName}\n`;
       if (item.description) text += `   ${item.description}\n`;
       text += `   ⭐ ${item.stars.toLocaleString()}`;
-      if (item.starsToday > 0) text += ` (+${item.starsToday.toLocaleString()})`;
+      if (item.starsToday > 0)
+        text += ` (+${item.starsToday.toLocaleString()})`;
       if (item.language) text += ` · ${item.language}`;
       text += '\n';
       if (item.summary) text += `   📝 ${item.summary}\n`;
@@ -344,10 +360,14 @@ export class EmailChannel {
     }[];
   }): string {
     const HIGH_SCORE_THRESHOLD = 60;
-    const highItems = data.items.filter(i => i.finalScore >= HIGH_SCORE_THRESHOLD);
-    const lowItems = data.items.filter(i => i.finalScore < HIGH_SCORE_THRESHOLD);
+    const highItems = data.items.filter(
+      (i) => i.finalScore >= HIGH_SCORE_THRESHOLD,
+    );
+    const lowItems = data.items.filter(
+      (i) => i.finalScore < HIGH_SCORE_THRESHOLD,
+    );
 
-    const renderFullItem = (item: typeof data.items[0]) => `
+    const renderFullItem = (item: (typeof data.items)[0]) => `
       <div style="margin-bottom:24px;padding:20px;background:#fff;border-radius:8px;border:1px solid #e5e7eb;">
         <h3 style="margin:0 0 8px;font-size:18px;color:#1a1a1a;">
           <a href="${this.escapeHtml(item.url)}" style="color:#2563eb;text-decoration:none;" target="_blank">
@@ -375,7 +395,7 @@ export class EmailChannel {
         </div>
       </div>`;
 
-    const renderCollapsedItem = (item: typeof data.items[0]) => `
+    const renderCollapsedItem = (item: (typeof data.items)[0]) => `
       <div style="margin-bottom:12px;padding:14px 16px;background:#fff;border-radius:6px;border:1px solid #e5e7eb;">
         <div style="display:flex;align-items:center;justify-content:space-between;">
           <div style="flex:1;min-width:0;">
@@ -394,8 +414,9 @@ export class EmailChannel {
     const highItemsHtml = highItems.map(renderFullItem).join('');
 
     // 低分文章用 details/summary 实现折叠（兼容大多数邮件客户端）
-    const lowItemsHtml = lowItems.length > 0
-      ? `
+    const lowItemsHtml =
+      lowItems.length > 0
+        ? `
       <div style="margin-top:32px;">
         <details>
           <summary style="cursor:pointer;font-size:16px;font-weight:600;color:#6b7280;padding:8px 0;list-style:none;-webkit-appearance:none;">
@@ -406,7 +427,7 @@ export class EmailChannel {
           </div>
         </details>
       </div>`
-      : '';
+        : '';
 
     return `
 <!DOCTYPE html>
@@ -451,8 +472,12 @@ export class EmailChannel {
     }[];
   }): string {
     const HIGH_SCORE_THRESHOLD = 60;
-    const highItems = data.items.filter(i => i.finalScore >= HIGH_SCORE_THRESHOLD);
-    const lowItems = data.items.filter(i => i.finalScore < HIGH_SCORE_THRESHOLD);
+    const highItems = data.items.filter(
+      (i) => i.finalScore >= HIGH_SCORE_THRESHOLD,
+    );
+    const lowItems = data.items.filter(
+      (i) => i.finalScore < HIGH_SCORE_THRESHOLD,
+    );
 
     let text = `每日精选 - ${data.date}\n${'='.repeat(40)}\n`;
     text += `共 ${data.items.length} 篇 · 精选 ${highItems.length} 篇 · 其他 ${lowItems.length} 篇\n\n`;
