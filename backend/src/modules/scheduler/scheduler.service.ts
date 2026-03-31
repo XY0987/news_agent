@@ -67,7 +67,7 @@ export class SchedulerService {
    * 每分钟轮询：检查用户的 notifyTime 是否匹配当前时刻（HH:MM）
    * Cron 表达式: 秒 分 时 日 月 星期 → 每分钟第 0 秒执行
    */
-  @Cron('0 * * * * *', { name: 'daily-agent-poll' })
+  // @Cron('0 * * * * *', { name: 'daily-agent-poll' })
   async handleAgentPoll(): Promise<void> {
     // 始终使用中国时区（Asia/Shanghai），避免服务器 UTC 时区导致时间不匹配
     const now = new Date();
@@ -221,7 +221,7 @@ export class SchedulerService {
    *
    * 注意：如果需要更精细的调度控制，应由外部调度系统或用户手动触发
    */
-  @Cron('0 */10 * * * *', { name: 'skill-schedule-poll' })
+  // @Cron('0 */10 * * * *', { name: 'skill-schedule-poll' })
   async handleSkillSchedulePoll(): Promise<void> {
     try {
       // 获取所有已注册的 Skill
