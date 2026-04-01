@@ -8,6 +8,8 @@ services:
       - "3000:80"
     depends_on:
       - api
+    environment:
+      - TZ=Asia/Shanghai
     restart: unless-stopped
 
   # 后端 API（NestJS）
@@ -17,6 +19,8 @@ services:
       - "8000:8000"
     env_file:
       - ./backend/.env
+    environment:
+      - TZ=Asia/Shanghai
     restart: unless-stopped
 
 # 使用外部网络，让 api 容器能直接通过容器名访问已有的 mysql/redis 容器
