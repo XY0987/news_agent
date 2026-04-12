@@ -130,7 +130,10 @@ export class ScorerService {
   /**
    * 获取最近已推送的内容标题
    */
-  private async getRecentSentTitles(userId: string, days: number): Promise<string[]> {
+  private async getRecentSentTitles(
+    userId: string,
+    days: number,
+  ): Promise<string[]> {
     const since = new Date();
     since.setDate(since.getDate() - days);
 
@@ -156,7 +159,7 @@ export class ScorerService {
    * 相关性评分 (0-100): 基于用户画像关键词/标签匹配
    */
   private scoreRelevance(content: ContentEntity, user: UserEntity): number {
-    const profile = (user.profile || {}) as Record<string, any>;
+    const profile = user.profile || {};
     const interests: string[] = [
       ...(profile.primaryInterests || []),
       ...(profile.secondaryInterests || []),
@@ -233,7 +236,8 @@ export class ScorerService {
    * 时效性评分 (0-100): 时间衰减函数
    */
   private scoreTimeliness(content: ContentEntity): number {
-    const publishDate = content.publishedAt || content.collectedAt || new Date();
+    const publishDate =
+      content.publishedAt || content.collectedAt || new Date();
     const ageHours =
       (Date.now() - new Date(publishDate).getTime()) / (1000 * 60 * 60);
 
@@ -251,7 +255,10 @@ export class ScorerService {
    * 新颖性评分 (0-100): 基于与最近已推送内容的标题相似度
    * 与已推送内容越不相似，分数越高
    */
-  private scoreNovelty(content: ContentEntity, recentSentTitles: string[]): number {
+  private scoreNovelty(
+    content: ContentEntity,
+    recentSentTitles: string[],
+  ): number {
     if (!content.title || recentSentTitles.length === 0) {
       return 80; // 无历史数据时给较高分
     }
@@ -265,7 +272,9 @@ export class ScorerService {
       const sentTokens = this.tokenize(sentTitle);
       if (sentTokens.size === 0) continue;
 
-      const intersection = new Set([...titleTokens].filter((t) => sentTokens.has(t)));
+      const intersection = new Set(
+        [...titleTokens].filter((t) => sentTokens.has(t)),
+      );
       const union = new Set([...titleTokens, ...sentTokens]);
       const similarity = intersection.size / union.size;
 
@@ -292,9 +301,22 @@ export class ScorerService {
 
     // 包含教程/步骤相关关键词
     const actionKeywords = [
-      'tutorial', '教程', 'how to', '如何', 'step by step', '步骤',
-      'example', '示例', 'demo', 'practice', '实践', 'hands-on',
-      'getting started', '入门', '实战', 'quickstart',
+      'tutorial',
+      '教程',
+      'how to',
+      '如何',
+      'step by step',
+      '步骤',
+      'example',
+      '示例',
+      'demo',
+      'practice',
+      '实践',
+      'hands-on',
+      'getting started',
+      '入门',
+      '实战',
+      'quickstart',
     ];
 
     for (const kw of actionKeywords) {
@@ -311,7 +333,8 @@ export class ScorerService {
     if (text.includes('http://') || text.includes('https://')) score += 10;
 
     // 包含命令行指令
-    if (text.includes('npm ') || text.includes('pip ') || text.includes('$ ')) score += 10;
+    if (text.includes('npm ') || text.includes('pip ') || text.includes('$ '))
+      score += 10;
 
     return Math.min(100, score);
   }

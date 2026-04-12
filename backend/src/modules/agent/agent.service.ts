@@ -110,13 +110,13 @@ export class AgentService {
   /**
    * 判断是否为限频错误（429 / 400 业务限频 / rate limit）
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   private isRateLimitError(error: any): boolean {
     if (!error) return false;
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
     const status = error.status || error.statusCode || error?.response?.status;
     if (status === 429) return true;
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
     const msg: string = String(error.message || error.toString()).toLowerCase();
     // 标准限频关键词
     if (

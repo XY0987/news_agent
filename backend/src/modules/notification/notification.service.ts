@@ -304,8 +304,9 @@ export class NotificationService {
   /**
    * 检查通知渠道状态
    */
-  async getChannelStatus(): Promise<
-    Record<string, { available: boolean; configured: boolean }>
+  getChannelStatus(): Record<
+    string,
+    { available: boolean; configured: boolean }
   > {
     return {
       email: {
@@ -388,7 +389,7 @@ export class NotificationService {
     const items = contents.map((content, index) => {
       const score = scoreMap.get(content.id);
       const interaction = interactionMap.get(content.id);
-      const meta = (content.metadata || {}) as Record<string, any>;
+      const meta = content.metadata || {};
 
       return {
         index: index + 1,

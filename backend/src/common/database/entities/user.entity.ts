@@ -11,11 +11,14 @@ export class UserEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ length: 255, unique: true, nullable: true })
+  @Column({ length: 255, unique: true })
   email: string;
 
   @Column({ length: 100 })
   name: string;
+
+  @Column({ name: 'password_hash', length: 255, select: false })
+  passwordHash: string;
 
   @Column({ type: 'json', nullable: true })
   profile: Record<string, any>;

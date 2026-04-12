@@ -1,8 +1,11 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ScheduleModule } from '@nestjs/schedule';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import configuration from './common/config/configuration';
+import { AuthModule } from './modules/auth/auth.module';
 import { UserModule } from './modules/user/user.module';
 import { SourceModule } from './modules/source/source.module';
 import { ContentModule } from './modules/content/content.module';
@@ -19,6 +22,7 @@ import { SchedulerModule } from './modules/scheduler/scheduler.module';
 import { SkillModule } from './modules/skill/skill.module';
 import { RedisModule } from './common/redis/redis.module';
 import { LlmRateLimiterModule } from './common/llm-rate-limiter/llm-rate-limiter.module';
+import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 
 @Module({
   imports: [
@@ -31,6 +35,20 @@ import { LlmRateLimiterModule } from './common/llm-rate-limiter/llm-rate-limiter
 
     // 定时任务调度
     ScheduleModule.forRoot(),
+
+    // 接口限频：同一 IP 60 秒内最多 60 次请求
+    ThrottlerModule.forRoot([
+      {
+        name: 'short',
+        ttl: 60000,
+        limit: 60,
+      },
+      {
+        name: 'long',
+        ttl: 600000,
+        limit: 300,
+      },
+    ]),
 
     // MySQL 数据库连接
     TypeOrmModule.forRootAsync({
@@ -62,6 +80,9 @@ import { LlmRateLimiterModule } from './common/llm-rate-limiter/llm-rate-limiter
     // LLM 请求限流（全局模块）
     LlmRateLimiterModule,
 
+    // 认证模块
+    AuthModule,
+
     // 业务模块
     UserModule,
     SourceModule,
@@ -77,6 +98,12 @@ import { LlmRateLimiterModule } from './common/llm-rate-limiter/llm-rate-limiter
     DigestModule,
     SchedulerModule,
     SkillModule,
+  ],
+  providers: [
+    // 全局 JWT 认证守卫
+    { provide: APP_GUARD, useClass: JwtAuthGuard },
+    // 全局限频守卫
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })
 export class AppModule {}

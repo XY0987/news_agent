@@ -205,7 +205,7 @@ export class CollectorService {
           (c) => c.sourceId === source.id,
         );
         if (sourceContents.length > 0) {
-          const currentStats = (source.stats || {}) as Record<string, any>;
+          const currentStats = source.stats || {};
           const updatedStats = {
             ...currentStats,
             totalArticles:
@@ -237,9 +237,7 @@ export class CollectorService {
   /**
    * 将采集到的 RawContent 写入 Content 表，URL 去重
    */
-  private async saveContents(
-    rawContents: RawContent[],
-  ): Promise<{
+  private async saveContents(rawContents: RawContent[]): Promise<{
     newSaved: number;
     duplicatesSkipped: number;
     savedIds: string[];

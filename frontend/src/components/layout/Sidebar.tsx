@@ -11,9 +11,12 @@ import {
   SlidersHorizontal,
   Puzzle,
   Bug,
+  LogOut,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
+import { Button } from "@/components/ui/button";
+import { useAuthStore } from "@/store/auth";
 
 const navItems = [
   { to: "/", icon: Sparkles, label: "今日精选" },
@@ -64,6 +67,8 @@ function NavItem({
 }
 
 export function Sidebar() {
+  const { user, logout } = useAuthStore();
+
   return (
     <aside className="hidden md:flex w-64 flex-col border-r bg-card">
       <div className="flex h-14 items-center border-b px-6">
@@ -92,6 +97,33 @@ export function Sidebar() {
           ))}
         </div>
       </nav>
+      {/* 底部用户信息 */}
+      <div className="border-t p-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+              <User className="h-4 w-4 text-primary" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-medium truncate">
+                {user?.name || "用户"}
+              </p>
+              <p className="text-xs text-muted-foreground truncate">
+                {user?.email || ""}
+              </p>
+            </div>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={logout}
+            title="退出登录"
+            className="shrink-0"
+          >
+            <LogOut className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
     </aside>
   );
 }

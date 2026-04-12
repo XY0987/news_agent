@@ -87,7 +87,7 @@ export class FilterService {
     // 按 sourceType 过滤（metadata.sourceType 或 metadata.sourceCategory）
     if (sourceType) {
       contents = contents.filter((c) => {
-        const meta = (c.metadata || {}) as Record<string, any>;
+        const meta = c.metadata || {};
         return (
           meta.sourceType === sourceType ||
           meta.sourceCategory === `${sourceType}_trending`

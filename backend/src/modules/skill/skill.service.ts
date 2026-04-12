@@ -6,11 +6,7 @@ import { SkillExecutionEntity } from '../../common/database/entities/skill-execu
 import { SkillRegistryService } from './skill-registry.service.js';
 import { SkillExecutorService } from './skill-executor.service.js';
 import { UserService } from '../user/user.service.js';
-import type {
-  SkillExecutionContext,
-  SkillExecutionResult,
-  SkillRegistryEntry,
-} from './skill.types.js';
+import type { SkillExecutionContext } from './skill.types.js';
 
 /**
  * Skill 业务服务
@@ -366,7 +362,7 @@ export class SkillService {
   /**
    * 热重载 Skill（代理到 Registry）
    */
-  async reloadSkills(skillId?: string): Promise<number> {
+  reloadSkills(skillId?: string): number {
     return this.registry.reload(skillId);
   }
 

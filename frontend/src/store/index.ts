@@ -27,10 +27,6 @@ interface UserState {
     id: string,
     prefs: Partial<UserPreferences>
   ) => Promise<void>;
-  createUser: (
-    email: string,
-    name: string
-  ) => Promise<void>;
 }
 
 export const useUserStore = create<UserState>((set) => ({
@@ -67,16 +63,6 @@ export const useUserStore = create<UserState>((set) => ({
     } catch (e: unknown) {
       set({ error: (e as Error).message });
       throw e;
-    }
-  },
-
-  createUser: async (email: string, name: string) => {
-    set({ loading: true, error: null });
-    try {
-      const res = await userApi.create({ email, name });
-      set({ user: res.data, loading: false });
-    } catch (e: unknown) {
-      set({ error: (e as Error).message, loading: false });
     }
   },
 }));

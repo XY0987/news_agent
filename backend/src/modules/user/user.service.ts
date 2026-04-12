@@ -3,7 +3,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UserEntity } from '../../common/database/entities/user.entity';
 import {
-  CreateUserDto,
   UpdateUserDto,
   UpdateProfileDto,
   UpdatePreferencesDto,
@@ -15,30 +14,6 @@ export class UserService {
     @InjectRepository(UserEntity)
     private readonly userRepo: Repository<UserEntity>,
   ) {}
-
-  async create(dto: CreateUserDto): Promise<UserEntity> {
-    const user = this.userRepo.create({
-      name: dto.name,
-      email: dto.email,
-      profile: dto.profile || {},
-      preferences: dto.preferences || {
-        pushFrequency: 'daily',
-        notifyTime: '08:00',
-        notifyChannels: ['email'],
-        topN: 5,
-        detailedNotify: false,
-        scoreWeights: {
-          relevance: 0.45,
-          quality: 0.2,
-          timeliness: 0.2,
-          novelty: 0.1,
-          actionability: 0.05,
-        },
-      },
-      notificationSettings: dto.notificationSettings || {},
-    });
-    return this.userRepo.save(user);
-  }
 
   async findAll(): Promise<UserEntity[]> {
     return this.userRepo.find();

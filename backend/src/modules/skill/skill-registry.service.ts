@@ -37,9 +37,9 @@ export class SkillRegistryService implements OnModuleInit {
   /**
    * NestJS 模块初始化时自动扫描并加载所有 Skill
    */
-  async onModuleInit(): Promise<void> {
+  onModuleInit(): void {
     this.logger.log(`初始化 SkillRegistry，扫描目录: ${this.skillsRootDir}`);
-    await this.discoverAndLoadAll();
+    this.discoverAndLoadAll();
   }
 
   // ==================== 公开 API ====================
@@ -47,7 +47,7 @@ export class SkillRegistryService implements OnModuleInit {
   /**
    * 扫描 skills/ 目录并加载所有 Skill
    */
-  async discoverAndLoadAll(): Promise<number> {
+  discoverAndLoadAll(): number {
     const dirs = this.parser.discoverSkillDirs(this.skillsRootDir);
     let loadedCount = 0;
 
@@ -209,7 +209,7 @@ export class SkillRegistryService implements OnModuleInit {
   /**
    * 热重载 Skill（单个或全部）
    */
-  async reload(skillId?: string): Promise<number> {
+  reload(skillId?: string): number {
     if (skillId) {
       // 重载单个
       const entry = this.registry.get(skillId);

@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, MoreThanOrEqual, Like } from 'typeorm';
+import { Repository } from 'typeorm';
 import { MemoryEntity } from '../../common/database/entities/memory.entity';
 
 @Injectable()
@@ -119,7 +119,7 @@ export class MemoryService {
     sourceId?: string;
     days?: number;
   }): Promise<any> {
-    const { userId, sourceId, days = 30 } = params;
+    const { userId, sourceId, days: _days = 30 } = params;
 
     // 查询相关的来源质量记忆
     const where: any = { userId, type: 'source_quality' };

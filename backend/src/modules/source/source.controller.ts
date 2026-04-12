@@ -57,8 +57,8 @@ export class SourceController {
   }
 
   @Post('validate')
-  async validate(@Body() dto: ValidateSourceDto) {
-    const result = await this.sourceService.validate(dto);
+  validate(@Body() dto: ValidateSourceDto) {
+    const result = this.sourceService.validate(dto);
     return ApiResponse.ok(result);
   }
 }

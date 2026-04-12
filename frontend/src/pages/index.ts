@@ -1,3 +1,6 @@
+export { LoginPage } from './LoginPage';
+export { RegisterPage } from './RegisterPage';
+export { ForgotPasswordPage } from './ForgotPasswordPage';
 export { HomePage } from './HomePage';
 export { FeedPage } from './FeedPage';
 export { SourcesPage } from './SourcesPage';

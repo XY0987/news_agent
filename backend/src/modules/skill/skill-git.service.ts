@@ -191,9 +191,7 @@ export class SkillGitService {
   /**
    * 卸载（删除）已安装的 Skill
    */
-  async uninstall(
-    skillId: string,
-  ): Promise<{ success: boolean; message: string }> {
+  uninstall(skillId: string): { success: boolean; message: string } {
     const entry = this.registry.get(skillId);
     if (!entry) {
       return { success: false, message: `Skill "${skillId}" 未注册` };

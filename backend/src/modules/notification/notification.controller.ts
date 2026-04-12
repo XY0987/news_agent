@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Query } from '@nestjs/common';
+import { Controller, Get, Post, Body } from '@nestjs/common';
 import {
   IsNotEmpty,
   IsString,
@@ -37,8 +37,8 @@ export class NotificationController {
    * 获取通知渠道状态
    */
   @Get('channels/status')
-  async getChannelStatus() {
-    const status = await this.notificationService.getChannelStatus();
+  getChannelStatus() {
+    const status = this.notificationService.getChannelStatus();
     return ApiResponse.ok(status);
   }
 

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { BaseCollector } from '../base.collector';
+import type { RawContent, SourceValidation } from '../base.collector';
 
 /**
  * RSS 采集器（MVP 优先）
@@ -7,13 +8,13 @@ import { BaseCollector } from '../base.collector';
  */
 @Injectable()
 export class RssCollector extends BaseCollector {
-  async collect(sources: any[]) {
+  collect(_sources: any[]): Promise<RawContent[]> {
     // TODO: 实现 RSS 源解析和内容采集
-    return [];
+    return Promise.resolve([]);
   }
 
-  async validateSource(source: any) {
+  validateSource(_source: any): Promise<SourceValidation> {
     // TODO: 验证 RSS 源是否有效
-    return { isValid: true, message: 'ok' };
+    return Promise.resolve({ isValid: true, message: 'ok' });
   }
 }

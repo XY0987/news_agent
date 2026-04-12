@@ -437,9 +437,9 @@ export class SkillController {
    * 热重载 Skill（可指定 skillId 或全部重载）
    */
   @Post('reload')
-  async reloadSkills(@Body() body: { skillId?: string }) {
+  reloadSkills(@Body() body: { skillId?: string }) {
     try {
-      const count = await this.skillService.reloadSkills(body.skillId);
+      const count = this.skillService.reloadSkills(body.skillId);
       return {
         success: true,
         data: {
@@ -513,11 +513,11 @@ export class SkillController {
    * 卸载通过 Git 安装的 Skill
    */
   @Delete(':skillId/uninstall')
-  async uninstallSkill(@Param('skillId') skillId: string) {
+  uninstallSkill(@Param('skillId') skillId: string) {
     this.logger.log(`卸载 Skill: ${skillId}`);
 
     try {
-      const result = await this.gitService.uninstall(skillId);
+      const result = this.gitService.uninstall(skillId);
 
       if (!result.success) {
         throw new HttpException(

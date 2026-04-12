@@ -12,9 +12,11 @@ import {
   Bookmark,
   Brain,
   SlidersHorizontal,
+  LogOut,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useAuthStore } from "@/store/auth";
 
 const mobileNavItems = [
   { to: "/", icon: Sparkles, label: "今日精选" },
@@ -31,6 +33,7 @@ const mobileNavItems = [
 export function Header() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const navigate = useNavigate();
+  const logout = useAuthStore((s) => s.logout);
 
   return (
     <header className="md:hidden border-b bg-card">
@@ -42,17 +45,27 @@ export function Header() {
           <Sparkles className="h-5 w-5 text-primary" />
           <span className="font-semibold">News Agent</span>
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => setMobileOpen(!mobileOpen)}
-        >
-          {mobileOpen ? (
-            <X className="h-5 w-5" />
-          ) : (
-            <Menu className="h-5 w-5" />
-          )}
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={logout}
+            title="退出登录"
+          >
+            <LogOut className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setMobileOpen(!mobileOpen)}
+          >
+            {mobileOpen ? (
+              <X className="h-5 w-5" />
+            ) : (
+              <Menu className="h-5 w-5" />
+            )}
+          </Button>
+        </div>
       </div>
       {mobileOpen && (
         <nav className="border-t p-4 space-y-1">

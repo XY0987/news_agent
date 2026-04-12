@@ -4,7 +4,7 @@ import { ContentCard } from "@/components/content/ContentCard";
 import { ContentDetail } from "@/components/content/ContentDetail";
 import { feedbackApi, contentApi } from "@/api/content";
 import { useContentStore } from "@/store";
-import { DEFAULT_USER_ID, formatDate } from "@/utils";
+import { DEFAULT_USER_ID } from "@/utils";
 import type { Content } from "@/types";
 
 export function HistoryPage() {

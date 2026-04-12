@@ -1,4 +1,5 @@
 export { default as apiClient } from "./client";
+export { authApi } from "./auth";
 export { userApi } from "./user";
 export { sourceApi, wechatApi } from "./source";
 export { contentApi, digestApi, feedbackApi } from "./content";

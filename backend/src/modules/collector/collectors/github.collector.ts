@@ -137,7 +137,7 @@ export class GithubCollector extends BaseCollector {
   /**
    * 验证 GitHub 数据源
    */
-  async validateSource(source: {
+  validateSource(source: {
     identifier: string;
     name?: string;
   }): Promise<SourceValidation> {
@@ -152,18 +152,24 @@ export class GithubCollector extends BaseCollector {
     ];
 
     if (validIdentifiers.includes(source.identifier)) {
-      return { isValid: true, message: 'GitHub 数据源标识有效' };
+      return Promise.resolve({
+        isValid: true,
+        message: 'GitHub 数据源标识有效',
+      });
     }
 
     // 也支持 owner/repo 格式（未来支持单仓库追踪）
     if (/^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_.-]+$/.test(source.identifier)) {
-      return { isValid: true, message: 'GitHub 仓库格式有效' };
+      return Promise.resolve({
+        isValid: true,
+        message: 'GitHub 仓库格式有效',
+      });
     }
 
-    return {
+    return Promise.resolve({
       isValid: false,
       message: `不支持的标识: ${source.identifier}。支持: ${validIdentifiers.join(', ')} 或 owner/repo 格式`,
-    };
+    });
   }
 
   // ====== 按标识符分发采集 ======

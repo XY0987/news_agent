@@ -1,7 +1,6 @@
 import {
   Controller,
   Get,
-  Post,
   Put,
   Patch,
   Delete,
@@ -10,7 +9,6 @@ import {
 } from '@nestjs/common';
 import { UserService } from './user.service';
 import {
-  CreateUserDto,
   UpdateUserDto,
   UpdateProfileDto,
   UpdatePreferencesDto,
@@ -21,12 +19,6 @@ import { ApiResponse } from '../../common/dto/api-response.dto';
 @Controller('api/users')
 export class UserController {
   constructor(private readonly userService: UserService) {}
-
-  @Post()
-  async create(@Body() dto: CreateUserDto) {
-    const user = await this.userService.create(dto);
-    return ApiResponse.ok(user, 'User created');
-  }
 
   @Get()
   async findAll() {

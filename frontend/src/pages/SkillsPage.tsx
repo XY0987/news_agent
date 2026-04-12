@@ -33,7 +33,6 @@ import {
   Settings2,
   History,
   Download,
-  Trash2,
   GitBranch,
 } from "lucide-react";
 import type { Skill, SkillDetail, SkillExecution } from "@/types";
@@ -65,7 +64,7 @@ function TriggerIcon({ type }: { type: string }) {
 }
 
 /** 状态徽章 */
-function StatusBadge({ status }: { status: Skill["status"] }) {
+function _StatusBadge({ status }: { status: Skill["status"] }) {
   switch (status) {
     case "enabled":
       return (
@@ -194,7 +193,7 @@ function SkillDetailDialog({
   detail,
   executions,
   onRun,
-  loading,
+  loading: _loading,
   executing,
 }: {
   open: boolean;

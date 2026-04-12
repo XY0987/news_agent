@@ -272,7 +272,7 @@ export class SkillPromptService {
     env: Record<string, string> = {},
   ): Promise<string> {
     // 匹配 !`...` 语法（支持跨行命令，但通常为单行）
-    const scriptPattern = /!\`([^`]+)\`/g;
+    const scriptPattern = /!`([^`]+)`/g;
     const matches: Array<{ fullMatch: string; command: string }> = [];
     let match: RegExpExecArray | null;
 
