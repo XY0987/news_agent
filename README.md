@@ -12,6 +12,8 @@
 
 ## ✨ 核心特性
 
+- **🔐 完整认证体系** — JWT 登录/注册/找回密码，邮箱验证码（Redis 存储 + SMTP 发送），全局 JWT Guard + `@Public()` 白名单，bcrypt 密码加密
+- **🛡️ 接口安全防护** — 双层限频（60s/60次 + 10min/300次），全局异常过滤器，请求日志拦截器，401 自动跳转
 - **🤖 LLM Agent** — 基于 Function Calling 的 Agent Loop，LLM 自主编排 16 种工具完成全流程，支持 3 种运行模式（每日精选 / GitHub 热点 / 分析模式）
 - **🔌 可插拔 Skills 系统** — 对标 Claude Code Skills 标准格式，支持从 Git 仓库动态安装 Skill，渐进式加载（description → 完整 prompt → references），安全沙箱执行脚本
 - **📡 多源内容采集** — 微信公众号（正文抓取、限流、Token 过期检测）+ GitHub 热点（Trending/Topics 页面解析、多维度采集）
@@ -21,7 +23,7 @@
 - **🔄 LLM 容错机制** — 主动限速（滑动窗口 RPM 控制）+ 被动重试（限频 4 级重试 + 自动切换备用模型）+ 告警邮件通知，Agent 失败时不发低质量内容
 - **💾 Agent 记忆** — 持久化存储决策经验、来源质量评估、偏好变化，跨会话可检索
 - **🛡️ 脚本安全沙箱** — Skill 脚本在受限环境执行（环境变量白名单清洗、路径约束、命令注入防护、超时控制）
-- **🎨 完整管理前端** — 10+ 页面，支持数据源管理、用户画像编辑、Skill 管理与安装、Agent 执行日志回溯等
+- **🎨 完整管理前端** — 15+ 页面（含登录/注册/找回密码），支持数据源管理、用户画像编辑、Skill 管理与安装、Agent 执行日志回溯等
 - **🧪 测试模式** — 通过环境变量 `COLLECT_MAX_SOURCES` 限制采集源数量，不改线上数据即可快速测试全流程
 
 ---
@@ -32,12 +34,20 @@
 ┌──────────────────────────────────────────────────────────┐
 │                     Frontend (:3000)                      │
 │       React 19 + Vite 7 + Zustand 5 + shadcn/ui         │
-│       10 个页面 · 40+ 个组件 · Tailwind CSS 暗色模式      │
+│  15 个页面 · 40+ 个组件 · 路由守卫 · JWT Token 管理      │
 └───────────────────────┬──────────────────────────────────┘
                         │ /api proxy
 ┌───────────────────────▼──────────────────────────────────┐
 │                     Backend (:8000)                       │
 │               NestJS 11 + TypeORM + OpenAI SDK           │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │  全局中间件层                                       │  │
+│  │  JWT AuthGuard · ThrottlerGuard · ExceptionFilter  │  │
+│  │  LoggingInterceptor · ValidationPipe               │  │
+│  └────────────────────────────────────────────────────┘  │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │  Auth 模块（注册/登录/验证码/找回密码/JWT 签发）      │  │
+│  └────────────────────────────────────────────────────┘  │
 │  ┌────────────────────────────────────────────────────┐  │
 │  │       Agent Loop（最多 25 步自主决策 × 3 模式）      │  │
 │  │                                                    │  │
@@ -59,7 +69,7 @@
              │                          │
       ┌──────▼──────┐           ┌───────▼───────┐
       │ MySQL (:3306)│           │ Redis (:6379) │
-      │  9 个实体表   │           │  凭证缓存/TTL  │
+      │ 11 个实体表   │           │ 凭证缓存/验证码 │
       └─────────────┘           └───────────────┘
 ```
 
@@ -74,9 +84,14 @@ news_agent/
 │   │   ├── common/
 │   │   │   ├── database/entities/    # 11 个 TypeORM 实体（User/Content/Score/Memory/SkillConfig 等）
 │   │   │   ├── config/               # 全局配置工厂
+│   │   │   ├── decorators/           # 自定义装饰器（@Public、@CurrentUser）
+│   │   │   ├── filters/              # 全局异常过滤器（统一错误响应格式）
+│   │   │   ├── guards/               # JWT 全局认证守卫
+│   │   │   ├── interceptors/         # 请求日志拦截器
 │   │   │   ├── llm-rate-limiter/     # LLM 请求主动限速（滑动窗口）
 │   │   │   └── redis/                # Redis 全局模块
 │   │   └── modules/
+│   │       ├── auth/                 # 🔐 认证模块（注册/登录/验证码/找回密码/JWT）
 │   │       ├── agent/                # 🤖 Agent Loop + Tool Registry（16 个工具，3 种模式）
 │   │       ├── collector/            # 📡 内容采集（微信公众号 + GitHub Trending/Topics）
 │   │       ├── content/              # 📄 内容 CRUD + 关联查询
@@ -96,17 +111,18 @@ news_agent/
 │       ├── daily-digest-email/       # 每日浓缩邮件 Skill
 │       └── reading-digest/           # 阅读笔记 Skill
 ├── frontend/src/
-│   ├── api/                          # 7 个 API 模块（Axios 封装 + 拦截器）
+│   ├── api/                          # 8 个 API 模块（含 Auth API，Axios + Token 拦截器）
 │   ├── components/                   # 40+ 个 UI 组件（shadcn/ui 基础 + 业务组件）
 │   │   ├── ui/                       # 17 个 shadcn/ui 基础组件
-│   │   ├── layout/                   # 响应式布局（Sidebar + Header）
+│   │   ├── auth/                     # 路由守卫（ProtectedRoute）
+│   │   ├── layout/                   # 响应式布局（Sidebar 含用户信息 + Header 含退出按钮）
 │   │   ├── content/                  # 内容卡片/详情/反馈
 │   │   ├── source/                   # 数据源管理/微信搜索/GitHub 添加
 │   │   ├── profile/                  # 画像编辑/兴趣标签
 │   │   ├── agent/                    # Agent 洞察
 │   │   └── common/                   # 评分指示器/标签选择器
-│   ├── pages/                        # 10+ 页面（含 Skills 管理页）
-│   ├── store/                        # 4 个 Zustand Store（User/Content/Source/Skill）
+│   ├── pages/                        # 15 个页面（含登录/注册/找回密码 + Skills 管理页）
+│   ├── store/                        # 5 个 Zustand Store（Auth/User/Content/Source/Skill）
 │   ├── types/                        # 前后端类型契约
 │   └── utils/                        # 日期/评分/状态工具函数
 ├── docker-compose.yml
@@ -318,6 +334,43 @@ curl -X POST http://localhost:8000/api/skills/my-custom-skill/update
 
 ---
 
+## 🔐 认证与安全
+
+### 用户认证
+
+系统基于 **JWT + 邮箱验证码** 实现完整的认证流程：
+
+| 功能 | 端点 | 说明 |
+|------|------|------|
+| 发送验证码 | `POST /api/auth/send-code` | 支持 `register` 和 `reset` 两种场景，60 秒间隔防刷 |
+| 注册 | `POST /api/auth/register` | 邮箱 + 密码 + 验证码，bcrypt 加密存储 |
+| 登录 | `POST /api/auth/login` | 邮箱 + 密码，签发 7 天有效期 JWT |
+| 找回密码 | `POST /api/auth/reset-password` | 邮箱 + 验证码 + 新密码 |
+| 获取当前用户 | `GET /api/auth/me` | 通过 JWT 获取已登录用户信息 |
+
+- 验证码通过 **Redis** 存储（5 分钟过期），经 **SMTP 邮件** 发送
+- 密码使用 **bcrypt** 加密（10 轮 salt），`passwordHash` 字段默认不查询（`select: false`）
+- JWT 包含 `userId` 和 `email`，由 `@nestjs/jwt` 签发
+
+### 接口安全
+
+| 层级 | 机制 | 说明 |
+|------|------|------|
+| **认证守卫** | `JwtAuthGuard`（全局） | 默认所有路由需要 JWT，`@Public()` 装饰器标记白名单 |
+| **接口限频** | `ThrottlerGuard`（全局双层） | 短窗口：60s/60 次，长窗口：10min/300 次，防盗刷 |
+| **异常过滤** | `HttpExceptionFilter`（全局） | 统一错误响应格式 `{ success, statusCode, message, path }` |
+| **请求日志** | `LoggingInterceptor`（全局） | 记录每个请求的方法、路径和耗时 |
+| **参数校验** | `ValidationPipe`（全局） | class-validator 自动校验 + 白名单过滤 |
+
+### 前端路由守卫
+
+- `ProtectedRoute` 组件包裹所有需认证的路由，未登录重定向到 `/login`
+- `apiClient` 请求拦截器自动携带 `Authorization: Bearer <token>`
+- 401 响应自动清除本地 Token 并跳转登录页
+- Sidebar 底部展示当前用户信息和退出按钮
+
+---
+
 ## 🛡️ 脚本安全沙箱
 
 所有 Skill 脚本通过 `SkillSandboxService` 在受限环境中执行：
@@ -465,6 +518,7 @@ npm run dev
 | `WECHAT_MAX_AGE_DAYS` | | 微信文章最大保留天数，默认 7 天 |
 | `GITHUB_TOKEN` | 🔧 | GitHub Personal Access Token |
 | `COLLECT_MAX_SOURCES` | 🧪 | 测试模式：每种类型最多采集的源数量（不设或 `0` 表示不限制） |
+| `JWT_SECRET` | ✅ | JWT 签名密钥（建议使用 32 位以上随机字符串） |
 
 > ✅ 必填 · 📧 邮件推送需要 · 🔧 对应采集源需要 · 🧪 测试/开发用
 
@@ -529,6 +583,9 @@ curl -X POST http://localhost:8000/api/agent/run-github?userId=YOUR_USER_ID
 
 | 页面 | 路径 | 功能 |
 |------|------|------|
+| 登录 | `/login` | 邮箱密码登录，JWT Token 签发 |
+| 注册 | `/register` | 邮箱注册，验证码校验，密码加密存储 |
+| 找回密码 | `/forgot-password` | 邮箱验证码验证，重置密码 |
 | 今日精选 | `/` | 查看当日 AI 推送的精选文章，按评分分区展示 |
 | 信息流 | `/feed` | 浏览所有已采集文章，支持筛选和分页 |
 | 数据源管理 | `/sources` | 添加/删除数据源，查看采集统计，微信搜索添加，GitHub 源添加 |
@@ -539,7 +596,10 @@ curl -X POST http://localhost:8000/api/agent/run-github?userId=YOUR_USER_ID
 | 阅读历史 | `/history` | 查看反馈过的文章记录 |
 | 我的收藏 | `/saved` | 收藏的文章列表 |
 | 系统设置 | `/settings` | SMTP 邮件配置、微信凭证管理、手动触发 Agent |
-| 添加数据源 | `/add-source` | 手动添加数据源表单 |
+| 调试工具 | `/debug` | 微信采集调试、Agent 日志查看 |
+| 添加数据源 | `/sources/add` | 手动添加数据源表单 |
+
+> 除登录/注册/找回密码外，所有页面均需要认证才能访问。前端通过 `ProtectedRoute` 组件实现路由守卫，未登录时自动重定向到登录页。
 
 ---
 
@@ -569,11 +629,14 @@ curl -X POST http://localhost:8000/api/agent/run-github?userId=YOUR_USER_ID
 | NestJS | 11 | Web 框架 + 模块化 DI |
 | TypeORM | 0.3 | ORM + 实体管理 |
 | MySQL | 5.7 | 关系型数据库 |
-| Redis (ioredis) | 5.9 | 微信凭证缓存 |
+| Redis (ioredis) | 5.9 | 验证码存储 + 微信凭证缓存 |
+| @nestjs/jwt + Passport | — | JWT 认证 + Passport 策略 |
+| @nestjs/throttler | — | 接口限频（双层滑动窗口） |
+| bcryptjs | — | 密码哈希加密 |
 | OpenAI SDK | 6.x | LLM 调用（兼容所有 OpenAI API 格式） |
 | @nestjs/schedule | 6.x | Cron 定时任务 |
 | Cheerio | 1.2 | 微信文章/GitHub 页面 HTML 解析 |
-| Nodemailer | 8.x | SMTP 邮件发送 |
+| Nodemailer | 8.x | SMTP 邮件发送（验证码 + 推送） |
 | Axios | 1.13 | HTTP 请求（微信/GitHub API 调用） |
 
 ### 前端
@@ -583,7 +646,7 @@ curl -X POST http://localhost:8000/api/agent/run-github?userId=YOUR_USER_ID
 | React | 19 | UI 框架 |
 | Vite | 7 | 构建工具 |
 | TypeScript | 5.9 | 类型安全 |
-| Zustand | 5 | 轻量状态管理（3 个 Store） |
+| Zustand | 5 | 轻量状态管理（5 个 Store：Auth/User/Content/Source/Skill） |
 | shadcn/ui + Radix UI | — | 无头组件库（17 个基础组件） |
 | Tailwind CSS | 3.4 | 原子化样式 + 暗色模式 |
 | React Router | 7 | 路由管理 |
@@ -599,18 +662,19 @@ curl -X POST http://localhost:8000/api/agent/run-github?userId=YOUR_USER_ID
 |------|------|------|
 | Agent Loop + 16 工具 | ✅ 已完成 | 3 种模式（每日精选/GitHub 热点/分析），含容错和兜底 |
 | Skills 可插拔技能系统 | ✅ 已完成 | 对标 Claude Code 标准格式，渐进式加载，Git 安装/卸载/更新 |
+| 用户认证系统 | ✅ 已完成 | JWT 登录/注册/找回密码，邮箱验证码，bcrypt 密码加密 |
+| 权限与安全 | ✅ 已完成 | 全局 JWT Guard + @Public 白名单，双层接口限频，全局异常过滤器，请求日志 |
 | 脚本安全沙箱 | ✅ 已完成 | 环境变量白名单、路径约束、命令注入防护、超时控制 |
 | 微信公众号采集 | ✅ 已完成 | 正文抓取、限流、Token 过期检测、自动刷新 |
 | GitHub 热点采集 | ✅ 已完成 | Trending（daily/weekly/monthly）+ Topics 页面解析，跨源去重 |
 | AI 摘要 + 评分 | ✅ 已完成 | LLM 生成摘要、评分，降级为规则摘要 |
 | 邮件推送 | ✅ 已完成 | 双模板（每日精选 + GitHub 热点），纯文本降级 |
 | Agent 记忆 | ✅ 已完成 | 基于关键词检索的 MySQL 持久化 |
-| 前端管理界面 | ✅ 已完成 | 11 个页面，40+ 组件，含 Skills 管理与安装 |
+| 前端管理界面 | ✅ 已完成 | 15 个页面，40+ 组件，含登录注册 + Skills 管理 |
 | 定时调度 | ✅ 已完成 | 分钟轮询 + 用户推送时间匹配 + 防重复 |
 | Docker 部署 | ✅ 已完成 | 多阶段构建 + 一键启动脚本 |
 | 测试模式 | ✅ 已完成 | 环境变量控制采集源数量，不改线上数据 |
 | RSS 采集器 | 🔜 计划中 | 基类已定义，后续实现 |
-| 用户认证 | 🔲 未实现 | 当前为单用户硬编码模式 |
 | Agent 实时交互 | 🔲 未实现 | 前端 AgentChat 组件为占位 |
 | 单元/集成测试 | 🔲 未覆盖 | Jest 已配置但暂无测试用例 |
 
