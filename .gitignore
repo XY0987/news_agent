@@ -33,3 +33,5 @@ mysql_data/
 redis_data/
 
 ai_news_llm/
+
+yarn.lock
