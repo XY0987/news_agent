@@ -319,6 +319,14 @@ export class AgentService {
     systemPrompt: string;
     userMessage: string;
     tools: OpenAI.ChatCompletionTool[];
+    /**
+     * 可选：允许的工具名白名单。
+     * 提供时，每轮从 ToolRegistry 实时获取工具列表并按此过滤——
+     * 这样 load_skill 动态注册的脚本工具能在下一轮被 LLM 发现。
+     * 不提供时（undefined），也会每轮实时获取全部工具。
+     * 初始 tools 列表仅用作首轮的快照/兜底。
+     */
+    allowedToolNames?: Set<string>;
     digestToolName: string;
     defaultReport: string;
     enableAutoDigest: boolean;
@@ -329,7 +337,8 @@ export class AgentService {
       label,
       systemPrompt,
       userMessage,
-      tools,
+      tools: _initialTools,
+      allowedToolNames,
       digestToolName,
       defaultReport,
       enableAutoDigest,
@@ -354,13 +363,20 @@ export class AgentService {
       for (let step = 0; step < this.maxSteps; step++) {
         const stepStart = Date.now();
 
+        // 每轮从 ToolRegistry 实时获取工具列表（支持 load_skill 动态注册的脚本工具）
+        const currentTools = this.getCurrentTools(allowedToolNames);
+
         this.logger.log(
           `[${sessionId}] ${label} Step ${step + 1}: 调用 LLM...`,
         );
 
         let response: OpenAI.ChatCompletion;
         try {
-          response = await this.callLLMWithRetry(sessionId, messages, tools);
+          response = await this.callLLMWithRetry(
+            sessionId,
+            messages,
+            currentTools,
+          );
         } catch (error) {
           this.logger.error(
             `[${sessionId}] LLM 调用最终失败: ${(error as Error).message}`,
@@ -732,10 +748,13 @@ export class AgentService {
         enableFallbackAlert: true,
       });
     } finally {
-      // 清理动态注册的 Skill 工具，避免污染后续执行
+      // 清理 load_skill 工具 + 已加载 Skill 的脚本工具和 post_run 钩子
       for (const tool of enhanced.skillTools) {
         this.toolRegistry.unregisterDynamic(tool.definition.function.name);
       }
+      await this.skillEnhancer.cleanupLoadedSkills(enhanced.loadedSkillIds, {
+        USER_ID: userId,
+      });
     }
   }
 
@@ -1031,6 +1050,8 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
     }
 
     // 只保留 GitHub 相关工具 + Skill 工具（如 load_skill）
+    // 传入 allowedToolNames 后，runAgentLoop 每轮动态获取并筛选，
+    // 这样 load_skill 注册的脚本工具（skill_script__*）也能在下一轮被发现
     const githubToolNames = new Set([
       'read_user_profile',
       'get_user_sources',
@@ -1066,6 +1087,7 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
 请自主决定执行步骤，合理使用可用工具。
 完成后输出最终的执行报告。`,
         tools: githubTools as OpenAI.ChatCompletionTool[],
+        allowedToolNames: githubToolNames,
         digestToolName: 'send_github_trending',
         defaultReport: 'GitHub 热点任务已完成',
         enableAutoDigest: false,
@@ -1075,6 +1097,9 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
       for (const tool of enhanced.skillTools) {
         this.toolRegistry.unregisterDynamic(tool.definition.function.name);
       }
+      await this.skillEnhancer.cleanupLoadedSkills(enhanced.loadedSkillIds, {
+        USER_ID: userId,
+      });
     }
   }
 
@@ -1347,7 +1372,31 @@ ${JSON.stringify(user.preferences || {}, null, 2)}
       for (const tool of enhanced.skillTools) {
         this.toolRegistry.unregisterDynamic(tool.definition.function.name);
       }
+      await this.skillEnhancer.cleanupLoadedSkills(enhanced.loadedSkillIds, {
+        USER_ID: userId,
+      });
     }
+  }
+
+  /**
+   * 获取当前可用的工具列表（通用方法）
+   *
+   * 每轮从 ToolRegistry 实时获取，以支持 load_skill 运行时动态注册的脚本工具。
+   * - 无白名单时返回全部工具
+   * - 有白名单时按白名单筛选，但自动放行所有 skill_script__* 动态脚本工具
+   */
+  private getCurrentTools(
+    allowedToolNames?: Set<string>,
+  ): OpenAI.ChatCompletionTool[] {
+    const allTools =
+      this.toolRegistry.getToolDefinitions() as OpenAI.ChatCompletionTool[];
+
+    if (!allowedToolNames) return allTools;
+
+    return allTools.filter((t) => {
+      const name = t.type === 'function' ? t.function?.name || '' : '';
+      return allowedToolNames.has(name) || name.startsWith('skill_script__');
+    });
   }
 
   /**
@@ -1572,7 +1621,8 @@ ${JSON.stringify(user.profile || {}, null, 2)}
 请按工作流程执行，完成后输出执行报告。`;
 
     // 选择工具集（包括动态注册的 Skill 工具）
-    const allTools = this.toolRegistry.getToolDefinitions();
+    // debugToolNames 作为白名单，每轮通过 getCurrentTools 动态获取并筛选
+    // 这样 load_skill 注册的脚本工具（skill_script__*）也能在下一轮被发现
     const debugToolNames = new Set([
       'read_user_profile',
       'get_user_sources',
@@ -1585,9 +1635,6 @@ ${JSON.stringify(user.profile || {}, null, 2)}
       // 自动加入 Skill 工具（如 load_skill）
       ...enhanced.skillTools.map((t) => t.definition.function.name),
     ]);
-    const tools = allTools.filter((t) =>
-      debugToolNames.has(t.function?.name || ''),
-    );
 
     const debugSteps: DebugStep[] = [];
 
@@ -1601,12 +1648,15 @@ ${JSON.stringify(user.profile || {}, null, 2)}
         const stepStart = Date.now();
         this.logger.log(`[${sessionId}] Debug Step ${step + 1}: 调用 LLM...`);
 
+        // 每轮动态获取工具列表（支持 load_skill 注册的脚本工具）
+        const currentTools = this.getCurrentTools(debugToolNames);
+
         let response: OpenAI.ChatCompletion;
         try {
           response = await this.callLLMWithRetry(
             sessionId,
             messages,
-            tools as OpenAI.ChatCompletionTool[],
+            currentTools,
           );
         } catch (error) {
           this.logger.error(
@@ -1763,10 +1813,12 @@ ${JSON.stringify(user.profile || {}, null, 2)}
         isSuccess: false,
       };
     } finally {
-      // 清理动态注册的 Skill 工具，避免污染后续执行
       for (const tool of enhanced.skillTools) {
         this.toolRegistry.unregisterDynamic(tool.definition.function.name);
       }
+      await this.skillEnhancer.cleanupLoadedSkills(enhanced.loadedSkillIds, {
+        USER_ID: userId,
+      });
     }
   }
 

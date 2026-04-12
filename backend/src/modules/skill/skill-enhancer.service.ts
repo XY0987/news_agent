@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { SkillRegistryService } from './skill-registry.service.js';
 import { SkillPromptService } from './skill-prompt.service.js';
+import { SkillExecutorService } from './skill-executor.service.js';
 import { SkillConfigEntity } from '../../common/database/entities/skill-config.entity.js';
 import type { SkillRegistryEntry } from './skill.types.js';
 import type {
@@ -25,30 +26,24 @@ export interface EnhancedConfig {
     definition: OpenAIToolDefinition;
     execute: ToolExecutor;
   }>;
+  /**
+   * 通过 load_skill 加载过的 Skill ID 列表（运行时动态填充）
+   * 调用方在清理时需遍历此列表，执行 post_run + 清理脚本工具
+   */
+  loadedSkillIds: string[];
 }
 
 /**
  * Skill 增强服务 —— 参照 Claude Code Skills 的两阶段渐进式加载机制
  *
- * Claude Code 官方 Skills 加载机制：
- *
- * | 阶段 | 何时加载 | 加载什么 | 上下文成本 |
- * |------|---------|---------|-----------|
- * | 第一阶段 | 会话启动时 | 所有已启用 Skill 的 name + description | 低（每个请求） |
- * | 第二阶段 | AI 判断需要时 | SKILL.md 的完整 Markdown 正文 | 按需（调用时加载） |
- * | 第三阶段 | 需要更多细节 | references/ 目录下的文档 | 按需 |
- *
  * 工作原理：
  * 1. enhance() 在 systemPrompt 末尾注入所有已启用 Skill 的 name + description（第一阶段）
  * 2. 同时注册 `load_skill` 工具，AI 判断某个 Skill 与任务相关时主动调用加载完整内容（第二阶段）
- * 3. load_skill 返回的完整 prompt 中如引用了 references/ 文件，也会一并加载（第三阶段）
+ * 3. load_skill 加载 Skill 时：执行 pre_run 钩子 → 注册脚本工具 → 返回完整指令
  * 4. AI 获得完整指令后，按 Skill 中的步骤执行任务
+ * 5. Agent 执行完毕后：调用 cleanupLoadedSkills 执行 post_run 钩子并清理脚本工具
  *
- * 设计原则（对齐 Claude Code）：
- * - 描述始终在上下文中，调用时加载完整 Skill
- * - AI 自主决策是否加载——就像看到 tool 列表后自己决定是否调用某个 tool
- * - 不需要 Skill 声明"增强哪个流程"，由 AI 根据 description 自行判断
- * - 如果用户没有启用任何 Skill，enhance 直接透传原始 prompt
+ * 生命周期钩子和脚本工具注册统一复用 SkillExecutorService，不维护两份实现。
  */
 @Injectable()
 export class SkillEnhancerService {
@@ -57,6 +52,7 @@ export class SkillEnhancerService {
   constructor(
     private readonly registry: SkillRegistryService,
     private readonly promptService: SkillPromptService,
+    private readonly executor: SkillExecutorService,
     @InjectRepository(SkillConfigEntity)
     private readonly configRepo: Repository<SkillConfigEntity>,
   ) {}
@@ -67,16 +63,11 @@ export class SkillEnhancerService {
    * 参照 Claude Code 的两阶段加载：
    * - 第一阶段：将已启用 Skill 的 description 注入 systemPrompt（AI 知道自己有哪些能力）
    * - 第二阶段：提供 load_skill 工具定义（AI 判断需要时主动加载完整 Skill 内容）
-   *
-   * @param originalPrompt - 现有流程构建的原始 systemPrompt
-   * @param userId - 当前用户 ID
-   * @returns 增强后的配置（包含新 systemPrompt、注入的 Skill 列表、Skill 工具定义）
    */
   async enhance(
     originalPrompt: string,
     userId: string,
   ): Promise<EnhancedConfig> {
-    // 1. 获取所有在注册表中可用的 Skill
     const allEntries = this.registry.list({ isAvailable: true });
 
     if (allEntries.length === 0) {
@@ -84,10 +75,10 @@ export class SkillEnhancerService {
         systemPrompt: originalPrompt,
         appliedSkills: [],
         skillTools: [],
+        loadedSkillIds: [],
       };
     }
 
-    // 2. 过滤出用户已启用的 Skill
     const enabledSkills = await this.filterUserEnabled(allEntries, userId);
 
     if (enabledSkills.length === 0) {
@@ -98,17 +89,23 @@ export class SkillEnhancerService {
         systemPrompt: originalPrompt,
         appliedSkills: [],
         skillTools: [],
+        loadedSkillIds: [],
       };
     }
 
-    // 3. 第一阶段：将 name + description 注入 systemPrompt
     const enhancedPrompt = this.injectSkillDescriptions(
       originalPrompt,
       enabledSkills,
     );
 
-    // 4. 第二阶段：构建 load_skill 工具定义（AI 判断需要时主动调用）
-    const skillTools = this.buildSkillTools(enabledSkills, userId);
+    // loadedSkillIds 会在 load_skill 执行时动态填充
+    const loadedSkillIds: string[] = [];
+
+    const skillTools = this.buildSkillTools(
+      enabledSkills,
+      userId,
+      loadedSkillIds,
+    );
 
     const appliedSkills = enabledSkills.map((entry) => ({
       id: entry.skill.id,
@@ -123,18 +120,62 @@ export class SkillEnhancerService {
       systemPrompt: enhancedPrompt,
       appliedSkills,
       skillTools,
+      loadedSkillIds,
     };
+  }
+
+  /**
+   * 清理所有通过 load_skill 加载的 Skill
+   *
+   * 对每个已加载的 Skill 执行：
+   * 1. post_run 生命周期钩子（失败仅警告，不中止）
+   * 2. 清理动态注册的脚本工具
+   *
+   * 调用方（AgentService）在 finally 块中调用此方法。
+   */
+  async cleanupLoadedSkills(
+    loadedSkillIds: string[],
+    env: Record<string, string>,
+  ): Promise<void> {
+    for (const skillId of loadedSkillIds) {
+      const entry = this.registry.get(skillId);
+      if (!entry) continue;
+
+      const skill = entry.skill;
+
+      // 1. 执行 post_run 钩子（失败仅警告）
+      if (this.executor.hasLifecycleScript(skill, 'post_run')) {
+        try {
+          const result = await this.executor.runLifecycleScript(
+            skill,
+            'post_run',
+            env,
+          );
+          if (result.exitCode !== 0) {
+            this.logger.warn(
+              `Skill "${skillId}" post_run 警告 (exit=${result.exitCode}): ${result.stderr}`,
+            );
+          } else {
+            this.logger.log(
+              `Skill "${skillId}" post_run 完成: ${result.stdout?.length || 0} chars`,
+            );
+          }
+        } catch (err) {
+          this.logger.warn(
+            `Skill "${skillId}" post_run 异常: ${(err as Error).message}`,
+          );
+        }
+      }
+
+      // 2. 清理脚本工具
+      this.executor.cleanupSkillScriptTools(skillId);
+    }
   }
 
   // ==================== 内部方法 ====================
 
   /**
    * 过滤出用户已启用的 Skill
-   *
-   * 逻辑：
-   * - 用户对该 Skill 有配置记录且 status=enabled → 启用
-   * - 用户对该 Skill 无配置记录 → 不启用（需要用户主动启用）
-   * - 用户对该 Skill 有配置记录且 status=disabled → 不启用
    */
   private async filterUserEnabled(
     entries: SkillRegistryEntry[],
@@ -144,7 +185,6 @@ export class SkillEnhancerService {
 
     const skillIds = entries.map((e) => e.skill.id);
 
-    // 批量查询用户配置
     const configs = await this.configRepo
       .createQueryBuilder('config')
       .where('config.userId = :userId', { userId })
@@ -160,10 +200,6 @@ export class SkillEnhancerService {
 
   /**
    * 第一阶段：将已启用 Skill 的 name + description 注入到 systemPrompt 末尾
-   *
-   * 参照 Claude Code：
-   * - 描述始终在上下文中（description 长度超过 250 字符会被截断）
-   * - 引导 AI 使用 load_skill 工具加载完整内容
    */
   private injectSkillDescriptions(
     originalPrompt: string,
@@ -171,7 +207,6 @@ export class SkillEnhancerService {
   ): string {
     const skillList = enabledSkills
       .map((entry) => {
-        // 参照 Claude Code：description 超过 250 字符截断
         let desc = entry.skill.frontmatter.description.trim();
         if (desc.length > 250) {
           desc = desc.slice(0, 247) + '...';
@@ -208,16 +243,12 @@ ${skillList}
   }
 
   /**
-   * 第二阶段：构建 Skill 相关的工具定义
-   *
-   * 注册 load_skill 工具，让 AI 在判断需要某个 Skill 时主动调用，
-   * 返回该 Skill 的完整 Markdown 正文 + references 文件内容。
-   *
-   * 这对应 Claude Code 的"调用时加载完整 Skill"行为。
+   * 第二阶段：构建 load_skill 工具定义
    */
   private buildSkillTools(
     enabledSkills: SkillRegistryEntry[],
     userId: string,
+    loadedSkillIds: string[],
   ): Array<{ definition: OpenAIToolDefinition; execute: ToolExecutor }> {
     const skillNames = enabledSkills.map((e) => e.skill.frontmatter.name);
 
@@ -229,6 +260,7 @@ ${skillList}
           description:
             '加载指定技能的完整指令内容。当你判断某个已启用的技能与当前任务相关时，' +
             '调用此工具获取该技能的详细执行步骤、参考资料和工具使用指南。' +
+            '加载后，技能附带的脚本工具会自动注册，你可以直接调用。' +
             `可用的技能名称: ${skillNames.join(', ')}`,
           parameters: {
             type: 'object' as const,
@@ -244,7 +276,12 @@ ${skillList}
         },
       },
       execute: async (args: Record<string, any>) => {
-        return this.loadSkillContent(args.skillName, enabledSkills, userId);
+        return this.loadSkillContent(
+          args.skillName as string,
+          enabledSkills,
+          userId,
+          loadedSkillIds,
+        );
       },
     };
 
@@ -254,22 +291,21 @@ ${skillList}
   /**
    * load_skill 工具的执行逻辑
    *
-   * 加载 Skill 的完整内容，实现渐进式披露的第二、第三阶段：
-   * 1. 加载 SKILL.md 的 Markdown 正文（完整 Agent 指令）
-   * 2. 执行变量插值（{{variable}} 替换）
-   * 3. 处理 !`command` 脚本注入（参照 Claude Code）
-   * 4. 加载 references/ 目录中的所有参考文档
-   * 5. 返回组合后的完整内容
+   * 1. 变量插值 → 2. !`command` 脚本注入 → 3. pre_run 钩子
+   * → 4. references 加载 → 5. 脚本工具注册 → 6. 组合返回
    */
   private async loadSkillContent(
     skillName: string,
     enabledSkills: SkillRegistryEntry[],
     userId: string,
+    loadedSkillIds: string[],
   ): Promise<{
     success: boolean;
     skillName: string;
     content?: string;
     references?: Array<{ name: string; content: string }>;
+    registeredScriptTools?: string[];
+    preRunOutput?: string;
     error?: string;
   }> {
     const entry = enabledSkills.find(
@@ -287,13 +323,13 @@ ${skillList}
 
     const skill = entry.skill;
     this.logger.log(
-      `load_skill: 加载技能 "${skillName}" 的完整内容 (${skill.prompt.length} chars prompt, ${skill.references.length} references)`,
+      `load_skill: 加载技能 "${skillName}" (${skill.prompt.length} chars prompt, ${skill.references.length} refs, ${skill.scripts.length} scripts)`,
     );
 
     try {
       // 1. 变量插值
       const variables = this.promptService.buildVariables({
-        userName: undefined, // 在增强模式下不强制要求用户名
+        userName: undefined,
         extraContext: {
           skillName: skill.frontmatter.name,
           skillDescription: skill.frontmatter.description,
@@ -301,7 +337,7 @@ ${skillList}
       });
       let fullContent = this.promptService.interpolate(skill.prompt, variables);
 
-      // 2. 处理 !`command` 脚本注入
+      // 2. !`command` 脚本注入
       const scriptEnv: Record<string, string> = {
         SKILL_ID: skill.id,
         SKILL_NAME: skill.frontmatter.name,
@@ -314,14 +350,38 @@ ${skillList}
         scriptEnv,
       );
 
-      // 3. 加载 references/ 目录中的文档
+      // 3. 执行 pre_run 生命周期钩子（复用 SkillExecutorService）
+      let preRunOutput: string | undefined;
+      if (this.executor.hasLifecycleScript(skill, 'pre_run')) {
+        this.logger.log(`load_skill: 执行 pre_run 钩子: ${skill.id}`);
+        const result = await this.executor.runLifecycleScript(
+          skill,
+          'pre_run',
+          scriptEnv,
+        );
+        if (result.exitCode !== 0) {
+          this.logger.warn(
+            `load_skill: "${skillName}" pre_run 失败 (exit=${result.exitCode}): ${result.stderr}`,
+          );
+          preRunOutput = `[⚠️ pre_run 脚本执行失败: ${result.stderr}]`;
+        } else {
+          preRunOutput = result.stdout?.trim() || undefined;
+          this.logger.log(
+            `load_skill: "${skillName}" pre_run 完成: ${preRunOutput?.length || 0} chars`,
+          );
+        }
+      }
+
+      // 4. 加载 references/
       const references: Array<{ name: string; content: string }> = [];
       for (const refName of skill.references) {
         const refPath = path.join(skill.dirPath, 'references', refName);
         try {
           if (fs.existsSync(refPath)) {
-            const refContent = fs.readFileSync(refPath, 'utf-8');
-            references.push({ name: refName, content: refContent });
+            references.push({
+              name: refName,
+              content: fs.readFileSync(refPath, 'utf-8'),
+            });
           }
         } catch (err) {
           this.logger.warn(
@@ -330,8 +390,23 @@ ${skillList}
         }
       }
 
-      // 4. 组合完整内容（prompt + references）
+      // 5. 动态注册脚本工具（复用 SkillExecutorService）
+      const registeredScriptTools = this.executor.registerSkillScriptTools(
+        skill,
+        scriptEnv,
+      );
+
+      // 追踪已加载的 Skill ID（用于 post_run 清理）
+      if (!loadedSkillIds.includes(skill.id)) {
+        loadedSkillIds.push(skill.id);
+      }
+
+      // 6. 组合完整内容
       let combinedContent = `# 技能: ${skill.frontmatter.name}\n\n${fullContent}`;
+
+      if (preRunOutput) {
+        combinedContent += `\n\n---\n\n# 🚀 预处理脚本输出 (pre_run)\n\n${preRunOutput}\n`;
+      }
 
       if (references.length > 0) {
         combinedContent += '\n\n---\n\n# 📖 参考资料\n';
@@ -340,8 +415,19 @@ ${skillList}
         }
       }
 
+      if (registeredScriptTools.length > 0) {
+        combinedContent += '\n\n---\n\n# 🔧 可用脚本工具\n\n';
+        combinedContent +=
+          '以下脚本工具已自动注册，你可以在推理过程中直接调用：\n\n';
+        for (const toolName of registeredScriptTools) {
+          combinedContent += `- \`${toolName}\`: 通过 SCRIPT_ARGS 环境变量接收 JSON 格式参数\n`;
+        }
+        combinedContent +=
+          '\n调用时传入 `args` 参数（JSON 对象），脚本会通过 SCRIPT_ARGS 环境变量读取。\n';
+      }
+
       this.logger.log(
-        `load_skill: 技能 "${skillName}" 加载完成 — ${combinedContent.length} chars (含 ${references.length} 个参考文件)`,
+        `load_skill: "${skillName}" 加载完成 — ${combinedContent.length} chars (${references.length} refs, ${registeredScriptTools.length} scripts)`,
       );
 
       return {
@@ -352,6 +438,8 @@ ${skillList}
           name: r.name,
           content: r.content,
         })),
+        registeredScriptTools,
+        preRunOutput,
       };
     } catch (err) {
       this.logger.error(
