@@ -678,16 +678,6 @@ curl -X POST http://localhost:8000/api/agent/run-github?userId=YOUR_USER_ID
 | Agent 实时交互 | 🔲 未实现 | 前端 AgentChat 组件为占位 |
 | 单元/集成测试 | 🔲 未覆盖 | Jest 已配置但暂无测试用例 |
 
-### 演进路线
-
-| 阶段 | 方案 | 状态 |
-|------|------|------|
-| Level 0 | 自建 Agent Loop + Function Calling | ✅ 当前 |
-| Level 1 | 迁移到 Vercel AI SDK / LangChain | 🔜 计划 |
-| Level 2 | 记忆增强（Embedding 向量检索 + 反馈闭环） | 🔜 计划 |
-| Level 3 | 多 Agent 协作（采集 Agent + 分析 Agent + 推送 Agent） | 📋 远期 |
-| Level 4 | 自主进化（Plan-Execute-Reflect 循环 + 自动策略调整） | 📋 远期 |
-
 ---
 
 ## 📄 License
