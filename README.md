@@ -126,7 +126,7 @@ news_agent/
 │   ├── types/                        # 前后端类型契约
 │   └── utils/                        # 日期/评分/状态工具函数
 ├── docker-compose.yml
-└── start.sh                          # 一键部署脚本
+└── service.sh                        # 服务管理脚本（启动/停止/重启/查看）
 ```
 
 ---
@@ -442,25 +442,27 @@ cp backend/.env.example backend/.env
 # 编辑 backend/.env，填入 LLM API Key、SMTP、数据库连接等配置
 
 # 2. 一键启动
-bash start.sh
+bash service.sh start
 ```
 
-`start.sh` 会自动：
+`service.sh start` 会自动：
 1. 启动 MySQL/Redis 外部容器，等待 MySQL 就绪
 2. 将 `.env` 中的 `DATABASE_HOST` / `REDIS_HOST` 替换为 Docker 容器名（原始值备份到 `.env.hostbak`）
 3. 创建共享网络 `news_agent_net`，加入所有容器
 4. `docker-compose up -d --build` 构建并启动前后端
 
-> 💡 **无需手动修改 HOST**：`start.sh` 启动时自动替换为容器名，停止时自动恢复。`.env` 中始终保持你的实际 IP 即可。
+> 💡 **无需手动修改 HOST**：脚本启动时自动替换为容器名，停止时自动恢复。`.env` 中始终保持你的实际 IP 即可。
 
 ```bash
-bash start.sh                    # 首次启动全部服务
-bash start.sh restart            # 重启全部（重新构建）
-bash start.sh restart backend    # 仅重启后端
-bash start.sh restart frontend   # 仅重启前端
-bash start.sh stop               # 停止全部（自动恢复 .env）
-bash start.sh logs backend       # 查看后端日志
-bash start.sh status             # 查看服务状态
+bash service.sh start                # 启动全部服务
+bash service.sh start frontend       # 仅启动前端
+bash service.sh start backend        # 仅启动后端
+bash service.sh restart              # 重启全部（重新构建）
+bash service.sh restart backend      # 仅重启后端
+bash service.sh stop                 # 停止全部（自动恢复 .env）
+bash service.sh stop frontend        # 仅停止前端
+bash service.sh logs backend         # 查看后端日志
+bash service.sh status               # 查看服务状态
 ```
 
 访问：前端 http://localhost:3000 · 后端 API http://localhost:8000
